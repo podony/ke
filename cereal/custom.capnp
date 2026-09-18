@@ -104,7 +104,7 @@ struct CustomReserved8 @0xf416ec09499d9d19 {
 struct CustomReserved9 @0xa1680744031fdb2d {
 }
 
-struct RoadLimitSpeed @0x6f2c4a1b9e3d7c58 {
+struct RoadLimitSpeed @0xa698139160ec370b {
   active @0 :Int16;
   roadLimitSpeed @1 :Int16;
   isHighway @2 :Bool;
