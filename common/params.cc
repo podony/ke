@@ -213,6 +213,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"dp_0813", PERSISTENT},
     {"dp_alka", PERSISTENT},
     {"dp_cam_decel", PERSISTENT},
+    {"dp_cam_decel_mode", PERSISTENT},
     {"dp_cam_decel_bump_dist", PERSISTENT},
     {"dp_cam_decel_bump_speed", PERSISTENT},
     {"dp_cam_decel_end", PERSISTENT},
