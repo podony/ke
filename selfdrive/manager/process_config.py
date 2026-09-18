@@ -68,6 +68,7 @@ procs = [
   PythonProcess("calibrationd", "selfdrive.locationd.calibrationd", only_onroad),
   PythonProcess("torqued", "selfdrive.locationd.torqued", only_onroad),
   PythonProcess("controlsd", "selfdrive.controls.controlsd", only_onroad),
+  PythonProcess("road_speed_limiter", "selfdrive.road_speed_limiter", always_run),
   PythonProcess("deleter", "selfdrive.loggerd.deleter", always_run),
   PythonProcess("dmonitoringd", "selfdrive.legacy_monitoring.dmonitoringd", driverview, enabled=(not PC or WEBCAM) and not NO_IR_CTRL),
   # PythonProcess("laikad", "selfdrive.locationd.laikad"),

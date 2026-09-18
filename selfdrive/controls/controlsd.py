@@ -20,6 +20,7 @@ from openpilot.selfdrive.boardd.boardd import can_list_to_can_capnp
 from openpilot.selfdrive.car.car_helpers import get_car, get_startup_event, get_one_can
 from openpilot.selfdrive.controls.lib.lateral_planner import CAMERA_OFFSET
 from openpilot.selfdrive.controls.lib.drive_helpers import VCruiseHelper, get_lag_adjusted_curvature
+from openpilot.selfdrive.road_speed_limiter import get_road_speed_limiter
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl, MIN_LATERAL_CONTROL_SPEED
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -98,6 +99,11 @@ class Controls:
     self.dp_no_gps_ctrl = self.params.get_bool("dp_no_gps_ctrl")
     self.dp_no_fan_ctrl = self.params.get_bool("dp_no_fan_ctrl")
     self.dp_0813 = self.params.get_bool("dp_0813")
+    self.dp_cam_decel = self.params.get_bool("dp_cam_decel")
+    if self.dp_cam_decel:
+      self.road_speed_limiter = get_road_speed_limiter()
+    else:
+      self.road_speed_limiter = None
     self._dp_alka = self.params.get_bool("dp_alka")
     self._dp_alka_active = True
     self._dp_alka_trigger_count = 0
@@ -117,7 +123,7 @@ class Controls:
         ignore += ['driverCameraState', 'managerState']
       if NO_IR_CTRL:
         ignore += ['driverCameraState', 'driverMonitoringState']
-      self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'liveCalibration',
+      self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'liveCalibration', 'roadLimitSpeed',
                                      'driverMonitoringState', 'longitudinalPlan', 'lateralPlan', 'liveLocationKalman',
                                      'managerState', 'liveParameters', 'radarState', 'liveTorqueParameters', 'testJoystick'] + self.camera_packets,
                                     ignore_alive=ignore, ignore_avg_freq=['radarState', 'testJoystick'])
@@ -566,6 +572,11 @@ class Controls:
     """Compute conditional state transitions and execute actions on state transitions"""
 
     self.v_cruise_helper.update_v_cruise(CS, self.enabled, self.is_metric)
+    # speed camera auto-decel: cap set speed toward camera limit (boltpilot port)
+    if self.dp_cam_decel and self.road_speed_limiter is not None:
+      apply_speed, _, _, _, _ = self.road_speed_limiter.get_max_speed(CS.vEgoCluster * CV.MS_TO_KPH, self.is_metric)
+      if self.v_cruise_helper.v_cruise_initialized and apply_speed > 0:
+        self.v_cruise_helper.v_cruise_kph = min(self.v_cruise_helper.v_cruise_kph, apply_speed)
 
     # decrement the soft disable timer at every step, as it's reset on
     # entrance in SOFT_DISABLING state

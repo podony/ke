@@ -76,6 +76,7 @@ services = {
   "managerState": (True, 2., 1),
   "uploaderState": (True, 0., 1),
   "navInstruction": (True, 1., 10),
+  "roadLimitSpeed": (False, 0.),
   "navRoute": (True, 0.),
   "navThumbnail": (True, 0.),
   "navModel": (True, 2., 4.),
