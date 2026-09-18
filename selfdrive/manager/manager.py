@@ -14,8 +14,10 @@ from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params, ParamKeyType
 from openpilot.common.text_window import TextWindow
 from openpilot.selfdrive.boardd.set_time import set_time
-from openpilot.system.hardware import HARDWARE, PC
+from openpilot.system.hardware import HARDWARE, PC, EON
 from openpilot.selfdrive.manager.helpers import unblock_stdout, write_onroad_params
+from multiprocessing import Process
+from openpilot.selfdrive.manager.process import launcher
 from openpilot.selfdrive.manager.process import ensure_running
 from openpilot.selfdrive.manager.process_config import managed_processes
 from openpilot.selfdrive.athena.registration import register, UNREGISTERED_DONGLE_ID
@@ -171,6 +173,10 @@ def manager_cleanup() -> None:
 
 
 def manager_thread() -> None:
+  if EON:
+    Process(name="autoshutdownd", target=launcher, args=("openpilot.selfdrive.autoshutdownd", "autoshutdownd")).start()
+    subprocess.call(["am", "startservice", "com.neokii.optool/.MainService"])
+
   cloudlog.bind(daemon="manager")
   cloudlog.info("manager start")
   cloudlog.info({"environ": os.environ})
