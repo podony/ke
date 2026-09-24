@@ -108,6 +108,8 @@ def manager_init() -> None:
 
   # set unset params
   for k, v in default_params:
+    if not params.check_key(k):
+      continue
     if params.get(k) is None:
       params.put(k, v)
 
