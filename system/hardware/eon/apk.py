@@ -17,13 +17,24 @@ def get_installed_apks():
   return ret
 
 def install_apk(path):
-  # can only install from world readable path
-  install_path = "/sdcard/%s" % os.path.basename(path)
-  shutil.copyfile(path, install_path)
-
-  ret = subprocess.call(["pm", "install", "-r", install_path])
-  os.remove(install_path)
-  return ret == 0
+  # can only install from a world readable path. On the Termux/bionic EON
+  # /sdcard is not always present, so prefer /data/local/tmp and fall back.
+  candidates = ["/data/local/tmp", "/sdcard"]
+  for d in candidates:
+    try:
+      install_path = os.path.join(d, os.path.basename(path))
+      shutil.copyfile(path, install_path)
+      ret = subprocess.call(["pm", "install", "-r", install_path])
+      try:
+        os.remove(install_path)
+      except OSError:
+        pass
+      if ret == 0:
+        return True
+      print("pm install failed (rc=%s) for %s via %s" % (ret, path, d))
+    except Exception as e:
+      print("install_apk: %s via %s: %s" % (path, d, e))
+  return False
 
 def start_offroad():
   set_package_permissions()
