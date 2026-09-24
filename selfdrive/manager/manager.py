@@ -76,6 +76,8 @@ def manager_init() -> None:
     ("dp_otisserv", "0"),
     ("dp_car_dashcam_mode_removal", "0"),
     ("dp_cam_decel", "0"),
+    ("dp_curve_decel", "1"),
+    ("dp_curve_decel_curv_factor", "0.98"),
     ("dp_cam_decel_mode", "0"),
     ("dp_cam_decel_start", "18"),
     ("dp_cam_decel_end", "6"),

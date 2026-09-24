@@ -21,6 +21,7 @@ from openpilot.selfdrive.car.car_helpers import get_car, get_startup_event, get_
 from openpilot.selfdrive.controls.lib.lateral_planner import CAMERA_OFFSET
 from openpilot.selfdrive.controls.lib.drive_helpers import VCruiseHelper, get_lag_adjusted_curvature
 from openpilot.selfdrive.road_speed_limiter import get_road_speed_limiter
+from openpilot.selfdrive.curve_speed import CurveDecelHelper
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl, MIN_LATERAL_CONTROL_SPEED
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -104,6 +105,7 @@ class Controls:
       self.road_speed_limiter = get_road_speed_limiter()
     else:
       self.road_speed_limiter = None
+    self.curve_decel = CurveDecelHelper(self.params)
     self._dp_alka = self.params.get_bool("dp_alka")
     self._dp_alka_active = True
     self._dp_alka_trigger_count = 0
@@ -577,6 +579,12 @@ class Controls:
       apply_speed, _, _, _, _ = self.road_speed_limiter.get_max_speed(CS.vEgoCluster * CV.MS_TO_KPH, self.is_metric)
       if self.v_cruise_helper.v_cruise_initialized and apply_speed > 0:
         self.v_cruise_helper.v_cruise_kph = min(self.v_cruise_helper.v_cruise_kph, apply_speed)
+
+    # curve auto-decel: cap set speed to a curve-appropriate speed (boltpilot port)
+    if self.enabled and self.v_cruise_helper.v_cruise_initialized:
+      curve_limit = self.curve_decel.get_speed_limit_kph(CS.vEgoCluster, self.sm['lateralPlan'].curvatures)
+      if curve_limit > 0:
+        self.v_cruise_helper.v_cruise_kph = min(self.v_cruise_helper.v_cruise_kph, curve_limit)
 
     # decrement the soft disable timer at every step, as it's reset on
     # entrance in SOFT_DISABLING state
