@@ -6,6 +6,12 @@ fi
 
 source "$BASEDIR/launch_env.sh"
 
+# EON marker: this launcher is only installed on the Bolt EON (Termux)
+if [ ! -f /EON ]; then
+  touch /EON
+fi
+
+
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 
 function two_init {

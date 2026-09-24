@@ -8,7 +8,12 @@ from typing import Optional, Callable, List, ValuesView
 from abc import ABC, abstractmethod
 from multiprocessing import Process
 
-from setproctitle import setproctitle
+try:
+  from setproctitle import setproctitle
+except ImportError:  # not on Termux/EON; cosmetic process-name only
+  def setproctitle(_name: str) -> None:
+    pass
+
 
 from cereal import car, log
 import cereal.messaging as messaging

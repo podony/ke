@@ -5,7 +5,14 @@ import time
 from collections import deque
 from typing import Optional, List, Union
 
-from setproctitle import getproctitle
+try:
+  from setproctitle import getproctitle
+except ImportError:  # not on Termux/EON; cosmetic process-name only
+  def getproctitle() -> str:
+    import os as _os
+    import sys as _sys
+    return _os.path.basename(_sys.argv[0]) if _sys.argv and _sys.argv[0] else "python"
+
 
 from openpilot.system.hardware import PC, TICI
 
