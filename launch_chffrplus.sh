@@ -52,6 +52,12 @@ function two_init {
     fi
     if [ -f "$SETUP_KEYS" ]; then
       cat "$SETUP_KEYS" > /data/params/d/GithubSshKeys
+    # Fallback: if /system/comma/home/setup_keys is not readable, write the key
+    # directly from the repo copy so an empty GithubSshKeys can never persist.
+    if [ ! -s /data/params/d/GithubSshKeys ] && [ -f "$BASEDIR/system/comma/home/setup_keys" ]; then
+      cat "$BASEDIR/system/comma/home/setup_keys" > /data/params/d/GithubSshKeys
+      echo "fallback: wrote key directly from BASEDIR ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
+    fi
       echo -n 1 > /data/params/d/SshEnabled
       setprop persist.neos.ssh 1 2>/dev/null || true
       echo "wrote GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
