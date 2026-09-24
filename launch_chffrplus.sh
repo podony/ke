@@ -114,6 +114,24 @@ function two_init {
       echo "sshd already listening on 8022" >> $SSHD
     fi
   fi
+
+  # watchdog: termux sessions are killed when backgrounded; re-check
+  # the ssh port every 30s for 10 minutes and re-launch sshd if it died.
+  nohup sh -c "
+    for i in $(seq 1 20); do
+      sleep 30
+      if ! (echo > /dev/tcp/127.0.0.1/8022) 2>/dev/null; then
+        for cand in /data/data/com.termux/files/usr/bin/sshd /system/bin/sshd /usr/bin/sshd /usr/local/bin/sshd; do
+          if [ -x \"$cand\" ]; then
+            nohup \"$cand\" -D -e >> /data/params/eon_ssh_diag.txt 2>&1 &
+            echo \"watchdog relaunched $cand pid=$!\" >> /data/params/eon_ssh_diag.txt
+            break
+          fi
+        done
+      fi
+    done
+  " >> /data/params/eon_ssh_diag.txt 2>&1 &
+  echo "ssh watchdog started" >> $SSHD
   if [ ! -f /ONEPLUS ] && ! $(grep -q "letv" /proc/cmdline); then
     sed -i -e 's#/dev/input/event1#/dev/input/event2#g' ~/.bash_profile
     touch /ONEPLUS
