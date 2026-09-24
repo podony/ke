@@ -7,6 +7,8 @@
 #   The prebuilt params_pyx.so in git is linked against glibc (libc.so.6),
 #   which does not exist on Termux (bionic).  This script rebuilds the
 #   Cython extension from source so it links against the local bionic.
+#   It uses common/params_min.cc (no swaglog/zmq/capnp deps) so the build
+#   does not require generated cereal headers.
 
 set -e
 
@@ -32,8 +34,7 @@ g++ -shared -fPIC -std=c++17 \
   -I "$BASEDIR" \
   -I "$(python -c 'import sysconfig; print(sysconfig.get_path("include"))')" \
   common/params_pyx.cpp \
-  common/params.cc \
-  common/swaglog.cc \
+  common/params_min.cc \
   -o common/params_pyx.so
 echo "  done: $(ls -lh common/params_pyx.so | awk '{print $5}')"
 
