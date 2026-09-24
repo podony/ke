@@ -17,6 +17,12 @@ except ImportError:  # not on Termux/EON; cosmetic process-name only
 from openpilot.system.hardware import PC, TICI
 
 
+def sec_since_boot() -> float:
+  # Seconds since boot (monotonic). Re-exported here so feature code
+  # (e.g. selfdrive/road_speed_limiter.py) can import it from common.realtime.
+  return time.monotonic()
+
+
 # time step for each process
 DT_CTRL = 0.01  # controlsd
 DT_MDL = 0.05  # model
