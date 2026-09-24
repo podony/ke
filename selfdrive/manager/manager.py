@@ -101,7 +101,20 @@ def manager_init() -> None:
   if not PC:
     default_params.append(("LastUpdateTime", datetime.datetime.utcnow().isoformat().encode('utf8')))
 
-  params.put("dp_car_list", get_support_car_list())
+  try:
+    carlist = get_support_car_list()
+    params.put("dp_car_list", carlist)
+    print("CARLIST_OK len=%s" % len(carlist), flush=True)
+  except Exception:
+    import traceback as _tb
+    print("CARLIST_FAIL", flush=True)
+    _tb.print_exc()
+    try:
+      with open('/data/params/eon_carlist_diag.txt', 'a') as _f:
+        _f.write('manager_init car list failed\n')
+        _f.write(_tb.format_exc())
+    except Exception:
+      pass
 
   if params.get_bool("RecordFrontLock"):
     params.put_bool("RecordFront", True)
@@ -258,7 +271,17 @@ def manager_thread() -> None:
 
 
 def main() -> None:
-  manager_init()
+  try:
+    manager_init()
+  except Exception:
+    import traceback as _tb
+    _tb.print_exc()
+    try:
+      with open("/data/params/eon_carlist_diag.txt", "a") as _f:
+        _f.write("manager_init crashed\n")
+        _f.write(_tb.format_exc())
+    except Exception:
+      pass
   if os.getenv("PREPAREONLY") is not None:
     return
 
