@@ -87,14 +87,28 @@ function two_init {
         if [ -x "$cand" ]; then SSHD_BIN="$cand"; break; fi
       done
       if [ -n "$SSHD_BIN" ]; then
-        SSHD_CFG=""
-        for cfg in /etc/ssh/sshd_config /system/etc/ssh/sshd_config /usr/etc/ssh/sshd_config; do
-          if [ -f "$cfg" ]; then SSHD_CFG="$cfg"; break; fi
-        fi
         nohup "$SSHD_BIN" -D -e >> /data/params/eon_ssh_diag.txt 2>&1 &
-        echo "launched $SSHD_BIN (cfg=$SSHD_CFG) pid=$!" >> $SSHD
+        echo "launched $SSHD_BIN pid=$!" >> $SSHD
       else
-        echo "no sshd binary found in known paths" >> $SSHD
+        echo "no sshd binary found, trying termux pkg install openssh" >> $SSHD
+        PKG=""
+        for cand in /data/data/com.termux/files/usr/bin/pkg /system/bin/pkg /usr/bin/pkg; do
+          if [ -x "$cand" ]; then PKG="$cand"; break; fi
+        done
+        if [ -n "$PKG" ]; then
+          "$PKG" install -y openssh >> /data/params/eon_ssh_diag.txt 2>&1 || true
+          for cand in /data/data/com.termux/files/usr/bin/sshd /usr/bin/sshd /usr/local/bin/sshd; do
+            if [ -x "$cand" ]; then SSHD_BIN="$cand"; break; fi
+          done
+          if [ -n "$SSHD_BIN" ]; then
+            nohup "$SSHD_BIN" -D -e >> /data/params/eon_ssh_diag.txt 2>&1 &
+            echo "launched $SSHD_BIN after pkg install pid=$!" >> $SSHD
+          else
+            echo "pkg install ran but sshd still missing - see diag" >> $SSHD
+          fi
+        else
+          echo "no pkg binary found either" >> $SSHD
+        fi
       fi
     else
       echo "sshd already listening on 8022" >> $SSHD
