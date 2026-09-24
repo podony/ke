@@ -38,20 +38,28 @@ function two_init {
   # openpilot ssh key installer
   # Re-install if the param file is missing OR empty (a previous failed
   # boot can leave an empty file, which would otherwise stay empty forever).
+  # Diagnostics: /tmp is wiped on reboot, keep ssh diag in /data/params.
+  SSHDIAG=/data/params/eon_ssh_diag.txt
   if [ ! -f /data/params/d/GithubSshKeys ] || [ ! -s /data/params/d/GithubSshKeys ]; then
+    echo "two_init: ssh keys (re)install path entered" >> $SSHD
+    [ ! -f "$BASEDIR/system/comma/home/setup_keys" ] && echo "BASEDIR setup_keys file MISSING: $BASEDIR/system/comma/home/setup_keys" >> $SSHD
     echo -n openpilot > /data/params/d/GithubUsername
     SETUP_KEYS="/system/comma/home/setup_keys"
     if [ ! -f "$SETUP_KEYS" ] && [ -f "$BASEDIR/system/comma/home/setup_keys" ]; then
       mkdir -p /system/comma/home
       cp -f "$BASEDIR/system/comma/home/setup_keys" "$SETUP_KEYS"
+      echo "copied setup_keys from $BASEDIR -> $SETUP_KEYS" >> $SSHD
     fi
     if [ -f "$SETUP_KEYS" ]; then
       cat "$SETUP_KEYS" > /data/params/d/GithubSshKeys
       echo -n 1 > /data/params/d/SshEnabled
-      setprop persist.neos.ssh 1
+      setprop persist.neos.ssh 1 2>/dev/null || true
+      echo "wrote GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
     else
-      echo "WARNING: setup_keys not found, SSH keys left empty"
+      echo "WARNING: setup_keys not found, SSH keys left empty" >> $SSHD
     fi
+  else
+    echo "two_init: ssh keys already present, skipped" >> $SSHD
   fi
   if [ ! -f /ONEPLUS ] && ! $(grep -q "letv" /proc/cmdline); then
     sed -i -e 's#/dev/input/event1#/dev/input/event2#g' ~/.bash_profile
