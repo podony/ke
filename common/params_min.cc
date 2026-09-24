@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <algorithm>
 #include <csignal>
@@ -305,7 +307,9 @@ std::unordered_map<std::string, uint32_t> keys = {
 
 Params::Params(const std::string &path) {
   const char *prefix_env = getenv("OPENPILOT_PREFIX");
-  std::string prefix = "/" + (prefix_env ? prefix_env : "d");
+  std::string prefix;
+  prefix += "/";
+  prefix += (prefix_env ? prefix_env : "d");
   params_path = get_params_root(prefix, path);
 }
 
