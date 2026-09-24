@@ -498,7 +498,14 @@ def get_interface_attr(attr: str, combine_brands: bool = False, ignore_none: boo
             result[f] = v
       else:
         result[brand_name] = attr_data
-    except (ImportError, OSError):
-      pass
+    except (ImportError, OSError) as e:
+      # diagnostic: dump import failures so an empty car list is debuggable
+      try:
+        import traceback as _tb
+        with open('/tmp/car_list_diag.txt', 'a') as _f:
+          _f.write('get_interface_attr(%s) failed for %s: %r\n' % (attr, brand_name, e))
+          _f.write(_tb.format_exc())
+      except Exception:
+        pass
 
   return result
