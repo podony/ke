@@ -3,6 +3,7 @@ import subprocess
 import glob
 import hashlib
 import shutil
+import datetime
 from openpilot.common.basedir import BASEDIR
 
 android_packages = ("com.neokii.optool", )
@@ -69,11 +70,29 @@ def system(cmd):
 
 # *** external functions ***
 
+def _apk_diag(msg):
+  try:
+    with open('/data/params/eon_apk_diag.txt', 'a') as f:
+      f.write("%s %s\n" % (datetime.datetime.now().isoformat(), msg))
+  except Exception:
+    pass
+
+# Permissions Mappy (com.mnsoft.mappyobn) needs to run silently in the
+# background and share camera/road data over localhost. Grant them after
+# install; failures are non-fatal.
+def grant_mappy_permissions():
+  for perm in ("ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "INTERNET",
+               "ACCESS_NETWORK_STATE", "ACCESS_WIFI_STATE", "WAKE_LOCK",
+               "READ_PHONE_STATE", "READ_EXTERNAL_STORAGE", "FOREGROUND_SERVICE"):
+    system("pm grant com.mnsoft.mappyobn android.permission.%s" % perm)
+  system("LD_LIBRARY_PATH= appops set com.mnsoft.mappyobn RUN_IN_BACKGROUND allow")
+
 def update_apks():
   # install apks
   installed = get_installed_apks()
 
   install_apks = glob.glob(os.path.join(BASEDIR, "apk/*.apk"))
+  _apk_diag("update_apks start, apks: %s" % str(install_apks))
   for apk in install_apks:
     app = os.path.basename(apk)[:-4]
     if app not in installed:
@@ -81,6 +100,7 @@ def update_apks():
 
   #cloudlog.info("installed apks %s" % (str(installed), ))
 
+  mappy_ok = False
   for app in installed.keys():
     apk_path = os.path.join(BASEDIR, "apk/"+app+".apk")
     if not os.path.exists(apk_path):
@@ -89,11 +109,16 @@ def update_apks():
     h1 = hashlib.sha1(open(apk_path, 'rb').read()).hexdigest()
     h2 = None
     if installed[app] is not None:
-      h2 = hashlib.sha1(open(installed[app], 'rb').read()).hexdigest()
+      try:
+        h2 = hashlib.sha1(open(installed[app], 'rb').read()).hexdigest()
+      except Exception as e:
+        _apk_diag("cannot read installed apk %s: %s (will reinstall)" % (installed[app], e))
+        h2 = None
       print("comparing version of %s  %s vs %s" % (app, h1, h2))
 
     if h2 is None or h1 != h2:
       print("installing %s" % app, flush=True)
+      _apk_diag("installing %s" % app)
 
       success = install_apk(apk_path)
       if not success:
@@ -102,12 +127,20 @@ def update_apks():
         success = install_apk(apk_path)
 
       if not success:
-        try:
-          with open('/data/params/eon_apk_diag.txt', 'a') as f:
-            f.write("APK install FAILED: " + apk_path + "\n")
-        except Exception:
-          pass
+        _apk_diag("APK install FAILED: " + apk_path)
         print("apk install failed, continuing: " + apk_path, flush=True)
+      else:
+        _apk_diag("APK install OK: " + apk_path)
+        if app == "com.mnsoft.mappyobn":
+          mappy_ok = True
+    else:
+      _apk_diag("APK already current: " + apk_path)
+      if app == "com.mnsoft.mappyobn":
+        mappy_ok = True
+
+  if mappy_ok:
+    grant_mappy_permissions()
+    _apk_diag("mappy permissions granted")
 
 def pm_apply_packages(cmd):
   for p in android_packages:

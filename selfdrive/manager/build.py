@@ -94,11 +94,40 @@ if EON:
   # APK/service layer ported from boltpilot. Runs on BOTH the prebuilt
   # (Termux EON) and source-build paths. Isolated and non-fatal: a failed
   # import or pm call must never block openpilot boot.
+  #
+  # NOTE: update_apks() imports nothing, but we call it in a subprocess so
+  # a long install (mappy ~60MB) cannot delay manager start. It also runs
+  # on EVERY boot: on first boot the `openpilot/` symlink tree may not exist
+  # yet when this line runs, so an import failure here is expected and the
+  # next boot picks it up.
   try:
-    from openpilot.system.hardware.eon.apk import update_apks, appops_set
-    update_apks()
-    os.chmod(BASEDIR, 0o755)
-    os.chmod(os.path.join(BASEDIR, "cereal"), 0o755)
-    appops_set("com.neokii.optool", "SU", "allow")
+    import subprocess as _sp
+    _diag = "/data/params/eon_apk_diag.txt"
+    _r = _sp.run(
+      ["python3", os.path.join(BASEDIR, "system", "hardware", "eon", "apk.py")],
+      stdout=_sp.PIPE, stderr=_sp.STDOUT, timeout=300)
+    _out = _r.stdout.decode("utf8", "replace")
+    print("eon apk layer rc=%s" % _r.returncode, flush=True)
+    if _out.strip():
+      print(_out.strip()[:2000], flush=True)
+    try:
+      with open(_diag, "a") as _f:
+        _f.write("=== apk.py rc=%s ===\n" % _r.returncode)
+        _f.write(_out[-8000:] if _out else "(no output)\n")
+    except Exception:
+      pass
+    if _r.returncode == 0:
+      os.chmod(BASEDIR, 0o755)
+      os.chmod(os.path.join(BASEDIR, "cereal"), 0o755)
+      try:
+        from openpilot.system.hardware.eon.apk import appops_set
+        appops_set("com.neokii.optool", "SU", "allow")
+      except Exception:
+        pass
   except Exception as e:
     print("eon apk layer skipped:", e, flush=True)
+    try:
+      with open("/data/params/eon_apk_diag.txt", "a") as _f:
+        _f.write("apk layer skipped: %r\n" % (e,))
+    except Exception:
+      pass

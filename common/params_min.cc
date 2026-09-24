@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <cstdio>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -91,7 +92,12 @@ bool create_params_path(const std::string &param_path, const std::string &key_pa
 std::string get_params_root(const std::string &prefix, const std::string &path) {
   std::string params_path = path.empty() ? std::string("/data/params") : path;
   if (!create_params_path(params_path, params_path + prefix)) {
-    throw std::runtime_error("Failed to ensure params path, errno=" + std::to_string(errno));
+    // Non-fatal: if /data/params cannot be created (e.g. storage not ready at
+    // boot), keep returning the default path instead of throwing. Params
+    // access will fail individually, but car-list build and manager start
+    // must not die at import time.
+    fprintf(stderr, "params: failed to ensure %s path, errno=%d (continuing non-fatal)",
+            params_path.c_str(), errno);
   }
   return params_path;
 }

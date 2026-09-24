@@ -103,6 +103,8 @@ def manager_init() -> None:
 
   try:
     carlist = get_support_car_list()
+    if not isinstance(carlist, str):
+      carlist = str(carlist)
     params.put("dp_car_list", carlist)
     print("CARLIST_OK len=%s" % len(carlist), flush=True)
   except Exception:
@@ -113,6 +115,14 @@ def manager_init() -> None:
       with open('/data/params/eon_carlist_diag.txt', 'a') as _f:
         _f.write('manager_init car list failed\n')
         _f.write(_tb.format_exc())
+    except Exception:
+      pass
+    # Fallback: keep a car list in params so the UI always has something to
+    # show. Fingerprinting (boardd) is independent of this list.
+    try:
+      known = sorted(all_known_cars())
+      params.put("dp_car_list", ",".join(known))
+      print("CARLIST_FALLBACK len=%s" % len(known), flush=True)
     except Exception:
       pass
 

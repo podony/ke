@@ -15,6 +15,8 @@ fi
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 
 function two_init {
+  fix_openpilot_symlinks "$BASEDIR"
+
   # convert to no ir ctrl param
   if [ -f /data/media/0/no_ir_ctrl ]; then
     echo -n 1 > /data/params/d/dp_device_no_ir_ctrl
@@ -52,20 +54,36 @@ function two_init {
     fi
     if [ -f "$SETUP_KEYS" ]; then
       cat "$SETUP_KEYS" > /data/params/d/GithubSshKeys
-    # Fallback: if /system/comma/home/setup_keys is not readable, write the key
-    # directly from the repo copy so an empty GithubSshKeys can never persist.
+    fi
+    # Fallback: if the key file is still empty, write it directly from the
+    # repo copy so an empty GithubSshKeys can never persist.
     if [ ! -s /data/params/d/GithubSshKeys ] && [ -f "$BASEDIR/system/comma/home/setup_keys" ]; then
       cat "$BASEDIR/system/comma/home/setup_keys" > /data/params/d/GithubSshKeys
       echo "fallback: wrote key directly from BASEDIR ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
     fi
-      echo -n 1 > /data/params/d/SshEnabled
-      setprop persist.neos.ssh 1 2>/dev/null || true
-      echo "wrote GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
-    else
-      echo "WARNING: setup_keys not found, SSH keys left empty" >> $SSHD
+    echo -n 1 > /data/params/d/SshEnabled
+    setprop persist.neos.ssh 1 2>/dev/null || true
+    echo "wrote GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
+    if [ ! -s /data/params/d/GithubSshKeys ]; then
+      echo "ERROR: GithubSshKeys is STILL EMPTY after all fallbacks" >> $SSHD
     fi
   else
     echo "two_init: ssh keys already present, skipped" >> $SSHD
+  fi
+
+  # Final guarantee: the param file must never be empty. This runs on EVERY
+  # boot regardless of the branch taken above, and writes the raw file
+  # directly (independent of the params .so key table).
+  if [ -f "$BASEDIR/system/comma/home/setup_keys" ] && [ ! -s /data/params/d/GithubSshKeys ]; then
+    cat "$BASEDIR/system/comma/home/setup_keys" > /data/params/d/GithubSshKeys
+    cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null || true
+    echo "final check: wrote GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
+  fi
+  if [ -s /data/params/d/GithubSshKeys ] && [ -d /root ] && [ -w /root ]; then
+    mkdir -p /root/.ssh 2>/dev/null && chmod 700 /root/.ssh 2>/dev/null
+    cat /data/params/d/GithubSshKeys >> /root/.ssh/authorized_keys 2>/dev/null || true
+    sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys 2>/dev/null
+    chmod 600 /root/.ssh/authorized_keys 2>/dev/null
   fi
 
   # Belt-and-suspenders SSH bring-up (double/triple redundant):
@@ -122,10 +140,17 @@ function two_init {
   fi
 
   # watchdog: termux sessions are killed when backgrounded; re-check
-  # the ssh port every 30s for 10 minutes and re-launch sshd if it died.
+  # the ssh key AND the ssh port every 60s for 10 minutes. If the key file
+  # is ever empty (e.g. a stale empty param), refill it from the repo copy;
+  # if sshd is not listening on 8022, relaunch it.
   nohup sh -c "
-    for i in $(seq 1 20); do
-      sleep 30
+    for i in $(seq 1 10); do
+      sleep 60
+      if [ ! -s /data/params/d/GithubSshKeys ] && [ -f \"$BASEDIR/system/comma/home/setup_keys\" ]; then
+        cat \"$BASEDIR/system/comma/home/setup_keys\" > /data/params/d/GithubSshKeys
+        cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null
+        echo \"watchdog refilled empty GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)\" >> /data/params/eon_ssh_diag.txt
+      fi
       if ! (echo > /dev/tcp/127.0.0.1/8022) 2>/dev/null; then
         for cand in /data/data/com.termux/files/usr/bin/sshd /system/bin/sshd /usr/bin/sshd /usr/local/bin/sshd; do
           if [ -x \"$cand\" ]; then
@@ -137,7 +162,7 @@ function two_init {
       fi
     done
   " >> /data/params/eon_ssh_diag.txt 2>&1 &
-  echo "ssh watchdog started" >> $SSHD
+  echo "ssh watchdog started (key refill + sshd, 60s x 10)" >> $SSHD
   if [ ! -f /ONEPLUS ] && ! $(grep -q "letv" /proc/cmdline); then
     sed -i -e 's#/dev/input/event1#/dev/input/event2#g' ~/.bash_profile
     touch /ONEPLUS
@@ -350,6 +375,31 @@ function two_init {
   mount -o remount,r /system
 }
 
+function fix_openpilot_symlinks {
+  # In git, openpilot/{common,selfdrive,system,third_party,tools} are symlinks
+  # to the real trees (../common etc.). A plain `git clone` on a filesystem
+  # that does not honor symlinks (e.g. a Windows checkout re-copied) turns
+  # them into tiny text files, which breaks every `import openpilot.*`.
+  # Re-create them here so device boot never depends on how the repo arrived.
+  local d="$1"
+  [ -n "$d" ] || d="$BASEDIR"
+  [ -d "$d/openpilot" ] || return 0
+  local pairs="common:common selfdrive:selfdrive/ system:system/ third_party:third_party tools:tools"
+  local pair link target
+  for pair in $pairs; do
+    link="$d/openpilot/${pair%%:*}"
+    target="${pair#*:}"
+    if [ -f "$link" ] && [ ! -L "$link" ]; then
+      rm -f "$link" 2>/dev/null
+      ln -s "$target" "$link" 2>/dev/null
+      echo "fixed openpilot symlink: $link -> $target"
+    elif [ ! -e "$link" ]; then
+      ln -s "$target" "$link" 2>/dev/null
+    fi
+  done
+}
+
+
 function agnos_init {
   # wait longer for weston to come up
   if [ -f "$BASEDIR/prebuilt" ]; then
@@ -376,6 +426,9 @@ function agnos_init {
 function launch {
   # Remove orphaned git lock if it exists on boot
   [ -f "$DIR/.git/index.lock" ] && rm -f $DIR/.git/index.lock
+
+  # fix openpilot symlink tree before anything imports python
+  fix_openpilot_symlinks "$DIR"
 
   # Pull time from panda
   $DIR/selfdrive/boardd/set_time.py
@@ -429,9 +482,25 @@ function launch {
   # EON: rebuild params_pyx.so with the dp_cam_decel keys (bionic-linked).
   # Non-fatal: the committed bionic .so (from 2225) keeps the device bootable
   # even if the rebuild is skipped (no Cython/g++ or build error).
+  #
+  # CRITICAL: a FAILED rebuild must not leave a half-written .so behind, or
+  # every python process that imports openpilot.common.params dies with a
+  # .so import error and the whole UI looks broken (empty car list, empty
+  # ssh keys param, missing menus). Back up the working .so first and restore
+  # it if the rebuild does not end with SUCCESS.
   if [ -f /EON ] && [ -f "$DIR/build_params_pyx.sh" ]; then
-    ( cd "$DIR" && bash build_params_pyx.sh ) >> /data/params/eon_params_build.log 2>&1 || \
-      echo "params_pyx rebuild skipped (booting with committed .so)"
+    if [ -f "$DIR/common/params_pyx.so" ]; then
+      cp -f "$DIR/common/params_pyx.so" /data/params/params_pyx.so.bak
+    fi
+    ( cd "$DIR" && bash build_params_pyx.sh ) >> /data/params/eon_params_build.log 2>&1
+    if grep -q "^SUCCESS$" /data/params/eon_params_build.log 2>/dev/null; then
+      echo "params_pyx rebuild OK" >> /data/params/eon_params_build.log
+    else
+      echo "params_pyx rebuild FAILED - restoring previous .so" >> /data/params/eon_params_build.log
+      if [ -f /data/params/params_pyx.so.bak ]; then
+        cp -f /data/params/params_pyx.so.bak "$DIR/common/params_pyx.so"
+      fi
+    fi
   fi
 
   # EON diagnostics: keep car-list import failures visible
