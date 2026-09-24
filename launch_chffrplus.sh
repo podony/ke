@@ -14,8 +14,68 @@ fi
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 
+# Upload EON diagnostic logs to GitHub logs/ branch (non-fatal, WiFi required)
+function upload_eon_logs {
+  local diagdir="/data/params"
+  local logdir="$BASEDIR/eon_logs"
+  mkdir -p "$logdir"
+
+  # Copy diag files to a git-managed dir
+  for f in eon_ssh_diag.txt eon_apk_diag.txt eon_carlist_diag.txt; do
+    if [ -s "$diagdir/$f" ]; then
+      cp -f "$diagdir/$f" "$logdir/$f"
+    fi
+  done
+
+  # Also grab a snapshot of key params (read-only, safe)
+  {
+    echo "=== $(date) EON param snapshot ==="
+    echo "GithubSshKeys size: $(wc -c < /data/params/d/GithubSshKeys 2>/dev/null || echo missing)"
+    echo "mappy installed: $(pm list packages 2>/dev/null | grep -c mappyobn || echo 0)"
+    echo "sshd process: $(pgrep -c sshd 2>/dev/null || echo 0)"
+    echo "openpilot HEAD: $(cd "$BASEDIR" && git log --oneline -1 2>/dev/null)"
+    echo "carlist_diag last 20 lines:"
+    tail -20 /tmp/car_list_diag.txt 2>/dev/null || echo "(none)"
+  } > "$logdir/summary.txt"
+
+  # Try to push to logs/ branch (best-effort, 15s timeout)
+  cd "$BASEDIR" || return
+  local origin_url
+  origin_url=$(git remote get-url origin 2>/dev/null)
+  [ -n "$origin_url" ] || return
+  # Re-authenticate on every boot in case the token changed.
+  git remote set-url origin "$origin_url" 2>/dev/null
+  case "$origin_url" in
+    http://*|https://*)
+      # Inject a token (dp_git_token param) if present; GitHub requires auth.
+      local token
+      token=$(cat /data/params/d/dp_git_token 2>/dev/null)
+      if [ -n "$token" ]; then
+        git remote set-url origin "https://x-access-token:$token@github.com/podony/ke.git" 2>/dev/null
+      fi
+      # Use a throwaway worktree so we never touch the main checkout.
+      git worktree add -q -f /tmp/eon_logs_wt logs 2>/dev/null \
+        || { git branch -q logs 2>/dev/null; git worktree add -q -f /tmp/eon_logs_wt logs 2>/dev/null; }
+      if [ -d /tmp/eon_logs_wt ]; then
+        cp -rf "$BASEDIR/eon_logs/." /tmp/eon_logs_wt/eon_logs/ 2>/dev/null
+        ( cd /tmp/eon_logs_wt && \
+          git -c user.email="eon@openpilot" -c user.name="EON" \
+            commit -qam "eon logs $(date +%s)" --allow-empty 2>/dev/null; \
+          timeout 15 git push -qf origin logs 2>>/data/params/eon_log_upload.txt \
+            && echo "push OK $(date)" >> /data/params/eon_log_upload.txt \
+            || echo "push FAIL rc=$? $(date)" >> /data/params/eon_log_upload.txt )
+        git worktree remove -qf /tmp/eon_logs_wt 2>/dev/null
+      fi
+      ;;
+    *) ;;
+  esac
+}
+
 function two_init {
   fix_openpilot_symlinks "$BASEDIR"
+
+  # Upload diagnostic logs to GitHub logs/ branch (non-fatal)
+  upload_eon_logs &
 
   # convert to no ir ctrl param
   if [ -f /data/media/0/no_ir_ctrl ]; then
