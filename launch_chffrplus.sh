@@ -347,6 +347,9 @@ function launch {
       echo "params_pyx rebuild skipped (booting with committed .so)"
   fi
 
+  # EON diagnostics: keep car-list import failures visible
+  cp -f /tmp/car_list_diag.txt /data/params/eon_carlist_diag.txt 2>/dev/null || true
+
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 

@@ -59,7 +59,7 @@ import sys; sys.path.insert(0, '$BASEDIR')
 from common.params_pyx import Params, UnknownKeyName
 p = Params()
 # Verify all dp_cam_decel keys are registered
-for k in ['dp_cam_decel','dp_cam_decel_mode','dp_cam_decel_start',
+for k in ['dp_car_list','dp_cam_decel','dp_cam_decel_mode','dp_cam_decel_start',
           'dp_cam_decel_end','dp_cam_decel_bump_dist','dp_cam_decel_bump_speed',
           'dp_cam_decel_safety_factor']:
   assert p.check_key(k), f'MISSING: {k}'
