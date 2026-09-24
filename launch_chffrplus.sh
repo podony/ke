@@ -330,6 +330,14 @@ function launch {
     tici_init
   fi
 
+  # EON: rebuild params_pyx.so with the dp_cam_decel keys (bionic-linked).
+  # Non-fatal: the committed bionic .so (from 2225) keeps the device bootable
+  # even if the rebuild is skipped (no Cython/g++ or build error).
+  if [ -f /EON ] && [ -f "$DIR/build_params_pyx.sh" ]; then
+    ( cd "$DIR" && bash build_params_pyx.sh ) >> /data/params/eon_params_build.log 2>&1 || \
+      echo "params_pyx rebuild skipped (booting with committed .so)"
+  fi
+
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 
