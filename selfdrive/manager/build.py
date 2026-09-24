@@ -90,15 +90,15 @@ if __name__ == "__main__" and not PREBUILT:
   spinner.update_progress(0, 100)
   build(spinner, is_dirty())
 
-  if EON:
-    # APK/service layer ported from boltpilot. Keep this isolated and
-    # non-fatal: a failed import or pm call must never block openpilot boot.
-    try:
-      from openpilot.system.hardware.eon.apk import update_apks, appops_set
-      update_apks()
-      os.chmod(BASEDIR, 0o755)
-      os.chmod(os.path.join(BASEDIR, "cereal"), 0o755)
-      os.chmod(os.path.join(BASEDIR, "cereal", "libmessaging_shared.so"), 0o755)
-      appops_set("com.neokii.optool", "SU", "allow")
-    except Exception as e:
-      print("eon apk layer skipped:", e)
+if EON:
+  # APK/service layer ported from boltpilot. Runs on BOTH the prebuilt
+  # (Termux EON) and source-build paths. Isolated and non-fatal: a failed
+  # import or pm call must never block openpilot boot.
+  try:
+    from openpilot.system.hardware.eon.apk import update_apks, appops_set
+    update_apks()
+    os.chmod(BASEDIR, 0o755)
+    os.chmod(os.path.join(BASEDIR, "cereal"), 0o755)
+    appops_set("com.neokii.optool", "SU", "allow")
+  except Exception as e:
+    print("eon apk layer skipped:", e, flush=True)

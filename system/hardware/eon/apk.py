@@ -93,15 +93,21 @@ def update_apks():
       print("comparing version of %s  %s vs %s" % (app, h1, h2))
 
     if h2 is None or h1 != h2:
-      print("installing %s" % app)
+      print("installing %s" % app, flush=True)
 
       success = install_apk(apk_path)
       if not success:
-        print("needing to uninstall %s" % app)
+        print("needing to uninstall %s" % app, flush=True)
         system("pm uninstall %s" % app)
         success = install_apk(apk_path)
 
-      assert success
+      if not success:
+        try:
+          with open('/data/params/eon_apk_diag.txt', 'a') as f:
+            f.write("APK install FAILED: " + apk_path + "\n")
+        except Exception:
+          pass
+        print("apk install failed, continuing: " + apk_path, flush=True)
 
 def pm_apply_packages(cmd):
   for p in android_packages:

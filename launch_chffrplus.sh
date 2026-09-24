@@ -36,7 +36,9 @@ function two_init {
   fi
 
   # openpilot ssh key installer
-  if [ ! -f /data/params/d/GithubSshKeys ]; then
+  # Re-install if the param file is missing OR empty (a previous failed
+  # boot can leave an empty file, which would otherwise stay empty forever).
+  if [ ! -f /data/params/d/GithubSshKeys ] || [ ! -s /data/params/d/GithubSshKeys ]; then
     echo -n openpilot > /data/params/d/GithubUsername
     SETUP_KEYS="/system/comma/home/setup_keys"
     if [ ! -f "$SETUP_KEYS" ] && [ -f "$BASEDIR/system/comma/home/setup_keys" ]; then

@@ -499,12 +499,19 @@ def get_interface_attr(attr: str, combine_brands: bool = False, ignore_none: boo
       else:
         result[brand_name] = attr_data
     except (ImportError, OSError) as e:
-      # diagnostic: dump import failures so an empty car list is debuggable
+      # diagnostic: dump import failures so an empty car list is debuggable.
+      # /tmp is wiped on reboot, so mirror to /data/params (persistent).
       try:
         import traceback as _tb
+        _msg = ('get_interface_attr(%s) failed for %s: %r\n' % (attr, brand_name, e))
+        _msg += _tb.format_exc()
         with open('/tmp/car_list_diag.txt', 'a') as _f:
-          _f.write('get_interface_attr(%s) failed for %s: %r\n' % (attr, brand_name, e))
-          _f.write(_tb.format_exc())
+          _f.write(_msg)
+        try:
+          with open('/data/params/eon_carlist_diag.txt', 'a') as _f:
+            _f.write(_msg)
+        except Exception:
+          pass
       except Exception:
         pass
 
