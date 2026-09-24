@@ -61,6 +61,45 @@ function two_init {
   else
     echo "two_init: ssh keys already present, skipped" >> $SSHD
   fi
+
+  # Belt-and-suspenders SSH bring-up (double/triple redundant):
+  #  1) Android init may not start sshd on this Termux EON, so also launch
+  #     it directly from here if it is not already listening on 8022.
+  #  2) Make the param key readable by any sshd variant: copy to the
+  #     conventional authorized_keys locations as well.
+  #  3) Ensure the sshd config (if present) points at our key file.
+  if [ -f /data/params/d/GithubSshKeys ]; then
+    # conventional locations some sshd builds default to
+    mkdir -p /data/params/d 2>/dev/null
+    cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null || true
+    # only touch /root if writable (termux usually is not root)
+    if [ -d /root ] && [ -w /root ]; then
+      mkdir -p /root/.ssh 2>/dev/null
+      chmod 700 /root/.ssh 2>/dev/null
+      cat /data/params/d/GithubSshKeys >> /root/.ssh/authorized_keys 2>/dev/null || true
+      sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys 2>/dev/null
+      chmod 600 /root/.ssh/authorized_keys 2>/dev/null
+    fi
+
+    if ! (echo > /dev/tcp/127.0.0.1/8022) 2>/dev/null; then
+      SSHD_BIN=""
+      for cand in /system/bin/sshd /usr/bin/sshd /usr/local/bin/sshd /data/data/com.termux/files/usr/bin/sshd; do
+        if [ -x "$cand" ]; then SSHD_BIN="$cand"; break; fi
+      done
+      if [ -n "$SSHD_BIN" ]; then
+        SSHD_CFG=""
+        for cfg in /etc/ssh/sshd_config /system/etc/ssh/sshd_config /usr/etc/ssh/sshd_config; do
+          if [ -f "$cfg" ]; then SSHD_CFG="$cfg"; break; fi
+        fi
+        nohup "$SSHD_BIN" -D -e >> /data/params/eon_ssh_diag.txt 2>&1 &
+        echo "launched $SSHD_BIN (cfg=$SSHD_CFG) pid=$!" >> $SSHD
+      else
+        echo "no sshd binary found in known paths" >> $SSHD
+      fi
+    else
+      echo "sshd already listening on 8022" >> $SSHD
+    fi
+  fi
   if [ ! -f /ONEPLUS ] && ! $(grep -q "letv" /proc/cmdline); then
     sed -i -e 's#/dev/input/event1#/dev/input/event2#g' ~/.bash_profile
     touch /ONEPLUS
