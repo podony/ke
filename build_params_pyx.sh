@@ -29,12 +29,27 @@ python -m cython --cplus -3 \
 echo "  done: $(ls -lh common/params_pyx.cpp | awk '{print $5}')"
 
 echo "[3/4] Compiling with g++ (bionic-linked ARM64)..."
+# On bionic (Termux) undefined symbols in a dlopen'ed module must come from the
+# global namespace or an explicit NEEDED entry. Link libpython explicitly so the
+# Py* symbols (e.g. PyExc_SystemError from Cython runtime) always resolve.
+PY_INCLUDE="$(python -c 'import sysconfig; print(sysconfig.get_path("include"))')"
+PY_LIBDIR="$(python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+PY_LIB="$(python -c 'import sysconfig; print(sysconfig.get_config_var("LDLIBRARY")) or sysconfig.get_config_var("LDLIBRARYSTDCXX") or ""')"
+if [ -n "$PY_LIB" ] && [ -e "$PY_LIBDIR/$PY_LIB" ]; then
+  echo "  linking against $PY_LIBDIR/$PY_LIB"
+  PY_LINK="-L"$PY_LIBDIR" -l"$(basename "$PY_LIB" | sed 's/^lib//; s/\.so.*//')" -Wl,-rpath,"$PY_LIBDIR""
+else
+  echo "  (no shared libpython found; relying on global symbols)"
+  PY_LINK=""
+fi
+
 g++ -shared -fPIC -std=c++17 \
   -O2 \
   -I "$BASEDIR" \
-  -I "$(python -c 'import sysconfig; print(sysconfig.get_path("include"))')" \
+  -I "$PY_INCLUDE" \
   common/params_pyx.cpp \
   common/params_min.cc \
+  $PY_LINK \
   -o common/params_pyx.so
 echo "  done: $(ls -lh common/params_pyx.so | awk '{print $5}')"
 
