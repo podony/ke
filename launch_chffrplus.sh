@@ -102,6 +102,23 @@ function two_init {
   # boot can leave an empty file, which would otherwise stay empty forever).
   # Diagnostics: /tmp is wiped on reboot, keep ssh diag in /data/params.
   SSHDIAG=/data/params/eon_ssh_diag.txt
+  # Merge public keys into the GithubSshKeys param instead of overwriting it:
+  # keep every existing key line, add any missing keys from $1, drop duplicate
+  # lines, and never write a private-key line. This preserves the COMMA user
+  # key that stock EON put in the param across a BRUNCH (re)install.
+  merge_ssh_keys() {
+    local sk_src="$1"
+    local sk_tmp="/data/params/d/GithubSshKeys.tmp"
+    [ -n "$sk_src" ] && [ -f "$sk_src" ] || return 0
+    { [ -f /data/params/d/GithubSshKeys ] && cat /data/params/d/GithubSshKeys
+      cat "$sk_src"
+    } | tr -d '\r' | grep -v 'PRIVATE KEY' | grep -v '^[[:space:]]*$' | sort -u > "$sk_tmp"
+    if [ -s "$sk_tmp" ]; then
+      cat "$sk_tmp" > /data/params/d/GithubSshKeys
+    fi
+    rm -f "$sk_tmp"
+    return 0
+  }
   if [ ! -f /data/params/d/GithubSshKeys ] || [ ! -s /data/params/d/GithubSshKeys ]; then
     echo "two_init: ssh keys (re)install path entered" >> $SSHD
     [ ! -f "$BASEDIR/system/comma/home/setup_keys" ] && echo "BASEDIR setup_keys file MISSING: $BASEDIR/system/comma/home/setup_keys" >> $SSHD
@@ -113,13 +130,13 @@ function two_init {
       echo "copied setup_keys from $BASEDIR -> $SETUP_KEYS" >> $SSHD
     fi
     if [ -f "$SETUP_KEYS" ]; then
-      cat "$SETUP_KEYS" > /data/params/d/GithubSshKeys
+      merge_ssh_keys "$SETUP_KEYS"
     fi
     # Fallback: if the key file is still empty, write it directly from the
     # repo copy so an empty GithubSshKeys can never persist.
     if [ ! -s /data/params/d/GithubSshKeys ] && [ -f "$BASEDIR/system/comma/home/setup_keys" ]; then
-      cat "$BASEDIR/system/comma/home/setup_keys" > /data/params/d/GithubSshKeys
-      echo "fallback: wrote key directly from BASEDIR ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
+      merge_ssh_keys "$BASEDIR/system/comma/home/setup_keys"
+      echo "fallback: merged key directly from BASEDIR ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
     fi
     echo -n 1 > /data/params/d/SshEnabled
     setprop persist.neos.ssh 1 2>/dev/null || true
@@ -134,10 +151,13 @@ function two_init {
   # Final guarantee: the param file must never be empty. This runs on EVERY
   # boot regardless of the branch taken above, and writes the raw file
   # directly (independent of the params .so key table).
-  if [ -f "$BASEDIR/system/comma/home/setup_keys" ] && [ ! -s /data/params/d/GithubSshKeys ]; then
-    cat "$BASEDIR/system/comma/home/setup_keys" > /data/params/d/GithubSshKeys
+  # Runs on EVERY boot even when the param is already non-empty, so keys added
+  # to setup_keys later (e.g. the COMMA user key) reach the auth file without
+  # deleting keys already present there (merge + dedup, never overwrite).
+  if [ -f "$BASEDIR/system/comma/home/setup_keys" ]; then
+    merge_ssh_keys "$BASEDIR/system/comma/home/setup_keys"
     cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null || true
-    echo "final check: wrote GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
+    echo "final check: merged GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
   fi
   if [ -s /data/params/d/GithubSshKeys ] && [ -d /root ] && [ -w /root ]; then
     mkdir -p /root/.ssh 2>/dev/null && chmod 700 /root/.ssh 2>/dev/null
@@ -207,7 +227,9 @@ function two_init {
     for i in $(seq 1 10); do
       sleep 60
       if [ ! -s /data/params/d/GithubSshKeys ] && [ -f \"$BASEDIR/system/comma/home/setup_keys\" ]; then
-        cat \"$BASEDIR/system/comma/home/setup_keys\" > /data/params/d/GithubSshKeys
+        { cat /data/params/d/GithubSshKeys; cat \"$BASEDIR/system/comma/home/setup_keys\"; } | tr -d '\r' | grep -v 'PRIVATE KEY' | sort -u > /data/params/d/GithubSshKeys.tmp
+        [ -s /data/params/d/GithubSshKeys.tmp ] && cat /data/params/d/GithubSshKeys.tmp > /data/params/d/GithubSshKeys
+        rm -f /data/params/d/GithubSshKeys.tmp
         cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null
         echo \"watchdog refilled empty GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)\" >> /data/params/eon_ssh_diag.txt
       fi
