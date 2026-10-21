@@ -102,6 +102,9 @@ function two_init {
   # boot can leave an empty file, which would otherwise stay empty forever).
   # Diagnostics: /tmp is wiped on reboot, keep ssh diag in /data/params.
   SSHDIAG=/data/params/eon_ssh_diag.txt
+  # NOTE: $SSHD was referenced 15 times below but never assigned, so every
+  # ">> $SSHD" diagnostic died with an ambiguous-redirect error. Bind it here.
+  SSHD=$SSHDIAG
   # Merge public keys into the GithubSshKeys param instead of overwriting it:
   # keep every existing key line, add any missing keys from $1, drop duplicate
   # lines, and never write a private-key line. This preserves the COMMA user
@@ -118,6 +121,61 @@ function two_init {
     fi
     rm -f "$sk_tmp"
     return 0
+  }
+  install_authkeys() {
+    # Push the param key into every authorized_keys an sshd variant may read.
+    # Termux sshd authenticates root against $HOME/.ssh/authorized_keys
+    # (/data/data/com.termux/files/home) - NOT /root, which is not writable
+    # on Termux; NEOS sshd uses /root/.ssh. Cover both plus the raw param
+    # copy. Missing the Termux location is why ssh was refused even with a
+    # non-empty GithubSshKeys param.
+    cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null || true
+    for h in /data/data/com.termux/files/home "$HOME" /root; do
+      [ -d "$h" ] || continue
+      mkdir -p "$h/.ssh" 2>/dev/null || continue
+      chmod 700 "$h/.ssh" 2>/dev/null
+      cat /data/params/d/GithubSshKeys >> "$h/.ssh/authorized_keys" 2>/dev/null || continue
+      sort -u "$h/.ssh/authorized_keys" -o "$h/.ssh/authorized_keys" 2>/dev/null
+      chmod 600 "$h/.ssh/authorized_keys" 2>/dev/null
+      echo "$(date) authkeys -> $h ($(wc -c < "$h/.ssh/authorized_keys") bytes)" >> $SSHD
+    done
+  }
+  persist_hostkeys() {
+    # Keep sshd host keys stable across builds/reinstalls. A regenerated
+    # host key (pkg reinstall, fresh Termux data) is what makes the PC's
+    # known_hosts reject the device after a build. Stash keys in
+    # /data/params (survives everything below /data/openpilot churn) and
+    # restore them whenever sshd's etc dir lost them.
+    HK_STORE=/data/params/ssh_hostkeys
+    HK_DIR=""
+    for cand in /data/data/com.termux/files/usr/etc/ssh /system/etc/ssh /usr/etc/ssh /etc/ssh; do
+      if [ -d "$cand" ]; then HK_DIR="$cand"; break; fi
+    done
+    [ -n "$HK_DIR" ] || return 0
+    mkdir -p "$HK_STORE" 2>/dev/null || return 0
+    for k in "$HK_STORE"/ssh_host_*_key; do
+      [ -f "$k" ] || continue
+      t="$HK_DIR/$(basename "$k")"
+      if [ ! -f "$t" ]; then
+        cp "$k" "$t" 2>/dev/null && chmod 600 "$t" 2>/dev/null
+        echo "$(date) restored host key $(basename "$k") -> $HK_DIR" >> $SSHD
+      fi
+    done
+    for k in "$HK_DIR"/ssh_host_*_key; do
+      [ -f "$k" ] || continue
+      [ -f "$HK_STORE/$(basename "$k")" ] || cp "$k" "$HK_STORE/" 2>/dev/null
+    done
+    if ! ls "$HK_DIR"/ssh_host_*_key >/dev/null 2>&1; then
+      KEYGEN=""
+      for cand in ssh-keygen /data/data/com.termux/files/usr/bin/ssh-keygen /system/bin/ssh-keygen; do
+        command -v "$cand" >/dev/null 2>&1 && { KEYGEN="$cand"; break; }
+      done
+      if [ -n "$KEYGEN" ]; then
+        "$KEYGEN" -t ed25519 -f "$HK_STORE/ssh_host_ed25519_key" -N '' -q 2>>$SSHD
+        cp "$HK_STORE"/ssh_host_ed25519_key* "$HK_DIR/" 2>/dev/null
+        echo "$(date) generated fresh host key (store + $HK_DIR)" >> $SSHD
+      fi
+    fi
   }
   if [ ! -f /data/params/d/GithubSshKeys ] || [ ! -s /data/params/d/GithubSshKeys ]; then
     echo "two_init: ssh keys (re)install path entered" >> $SSHD
@@ -156,14 +214,10 @@ function two_init {
   # deleting keys already present there (merge + dedup, never overwrite).
   if [ -f "$BASEDIR/system/comma/home/setup_keys" ]; then
     merge_ssh_keys "$BASEDIR/system/comma/home/setup_keys"
-    cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null || true
     echo "final check: merged GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)" >> $SSHD
   fi
-  if [ -s /data/params/d/GithubSshKeys ] && [ -d /root ] && [ -w /root ]; then
-    mkdir -p /root/.ssh 2>/dev/null && chmod 700 /root/.ssh 2>/dev/null
-    cat /data/params/d/GithubSshKeys >> /root/.ssh/authorized_keys 2>/dev/null || true
-    sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys 2>/dev/null
-    chmod 600 /root/.ssh/authorized_keys 2>/dev/null
+  if [ -s /data/params/d/GithubSshKeys ]; then
+    install_authkeys
   fi
 
   # Belt-and-suspenders SSH bring-up (double/triple redundant):
@@ -173,17 +227,8 @@ function two_init {
   #     conventional authorized_keys locations as well.
   #  3) Ensure the sshd config (if present) points at our key file.
   if [ -f /data/params/d/GithubSshKeys ]; then
-    # conventional locations some sshd builds default to
-    mkdir -p /data/params/d 2>/dev/null
-    cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null || true
-    # only touch /root if writable (termux usually is not root)
-    if [ -d /root ] && [ -w /root ]; then
-      mkdir -p /root/.ssh 2>/dev/null
-      chmod 700 /root/.ssh 2>/dev/null
-      cat /data/params/d/GithubSshKeys >> /root/.ssh/authorized_keys 2>/dev/null || true
-      sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys 2>/dev/null
-      chmod 600 /root/.ssh/authorized_keys 2>/dev/null
-    fi
+    install_authkeys
+    persist_hostkeys
 
     if ! (echo > /dev/tcp/127.0.0.1/8022) 2>/dev/null; then
       SSHD_BIN=""
@@ -233,11 +278,21 @@ function two_init {
         cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null
         echo \"watchdog refilled empty GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)\" >> /data/params/eon_ssh_diag.txt
       fi
+      if [ -s /data/params/d/GithubSshKeys ]; then
+        mkdir -p /data/data/com.termux/files/home/.ssh 2>/dev/null
+        cat /data/params/d/GithubSshKeys >> /data/data/com.termux/files/home/.ssh/authorized_keys 2>/dev/null
+        sort -u /data/data/com.termux/files/home/.ssh/authorized_keys -o /data/data/com.termux/files/home/.ssh/authorized_keys 2>/dev/null
+        chmod 600 /data/data/com.termux/files/home/.ssh/authorized_keys 2>/dev/null
+      fi
       if ! (echo > /dev/tcp/127.0.0.1/8022) 2>/dev/null; then
+        for hk in /data/params/ssh_hostkeys/ssh_host_*_key; do
+          [ -f \"$hk\" ] || continue
+          [ -f \"/data/data/com.termux/files/usr/etc/ssh/\$(basename \"\$hk\")\" ] || cp \"$hk\" \"/data/data/com.termux/files/usr/etc/ssh/\$(basename \"\$hk\")\" 2>/dev/null
+        done
         for cand in /data/data/com.termux/files/usr/bin/sshd /system/bin/sshd /usr/bin/sshd /usr/local/bin/sshd; do
-          if [ -x \"$cand\" ]; then
-            nohup \"$cand\" -D -e >> /data/params/eon_ssh_diag.txt 2>&1 &
-            echo \"watchdog relaunched $cand pid=$!\" >> /data/params/eon_ssh_diag.txt
+          if [ -x \"\$cand\" ]; then
+            nohup \"\$cand\" -D -e >> /data/params/eon_ssh_diag.txt 2>&1 &
+            echo \"watchdog relaunched \$cand pid=\$!\" >> /data/params/eon_ssh_diag.txt
             break
           fi
         done
@@ -351,72 +406,79 @@ function two_init {
 
   # install missing libs
   LIB_PATH="/data/openpilot/system/hardware/eon/libs"
-  PY_LIB_DEST="/system/comma/usr/lib/python3.8/site-packages"
-  mount -o remount,rw /system
-  # tomli
-  MODULE="tomli"
-  if [ ! -d "$PY_LIB_DEST/$MODULE" ]; then
-    echo "Installing $MODULE..."
-    tar -zxvf "$LIB_PATH/$MODULE.tar.gz" -C "$PY_LIB_DEST/"
+  LIBDIAG="/data/params/eon_libs_diag.txt"
+  # site-packages location depends on the image: NEOS ships
+  # /system/comma/usr/lib/python3.8, BRUNCH runs on Termux
+  # (/data/data/com.termux/files/usr/lib/python3.X). Ask the interpreter
+  # itself; a hardcoded NEOS path silently installs into nothing on Termux,
+  # which leaves strenum missing -> every car brand import fails -> empty
+  # car list and no fingerprint candidates.
+  PY_BIN=""
+  PY_LIB_DEST=""
+  for cand in python3 /system/comma/usr/bin/python3 /data/data/com.termux/files/usr/bin/python3; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      d=$("$cand" -c 'import site; print(site.getsitepackages()[0])' 2>/dev/null)
+      if [ -n "$d" ] && [ -d "$d" ]; then
+        PY_BIN="$cand"
+        PY_LIB_DEST="$d"
+        break
+      fi
+    fi
+  done
+  if [ -z "$PY_LIB_DEST" ]; then
+    PY_LIB_DEST="/system/comma/usr/lib/python3.8/site-packages"
   fi
-  # libgfortran
-  if [ ! -f "/system/comma/usr/lib/libgfortran.so.5.0.0" ]; then
+  echo "$(date) python=$PY_BIN site=$PY_LIB_DEST" >> "$LIBDIAG"
+  # /system is only a mount point on NEOS; on Termux remount fails harmlessly
+  mount -o remount,rw /system 2>/dev/null || true
+
+  install_pylib() {
+    # $1 = module dir/file name inside $LIB_PATH (tar.gz or bare file)
+    local m="$1"
+    if [ -d "$PY_LIB_DEST/$m" ] || [ -f "$PY_LIB_DEST/$m" ]; then
+      return 0
+    fi
+    echo "Installing $m..."
+    if [ -f "$LIB_PATH/$m.tar.gz" ]; then
+      tar -zxf "$LIB_PATH/$m.tar.gz" -C "$PY_LIB_DEST/" 2>>"$LIBDIAG"
+      echo "$(date) install $m rc=$?" >> "$LIBDIAG"
+    elif [ -f "$LIB_PATH/$m" ]; then
+      cp -f "$LIB_PATH/$m" "$PY_LIB_DEST/" 2>>"$LIBDIAG"
+      echo "$(date) copy $m rc=$?" >> "$LIBDIAG"
+    else
+      echo "$(date) install $m SKIPPED: no artifact in $LIB_PATH" >> "$LIBDIAG"
+    fi
+  }
+
+  install_pylib tomli
+  # libgfortran (NEOS-only lib dir; skip silently on Termux)
+  if [ -d /system/comma/usr/lib ] && [ ! -f "/system/comma/usr/lib/libgfortran.so.5.0.0" ]; then
     echo "Installing libgfortran..."
-    tar -zxvf "$LIB_PATH/libgfortran.tar.gz" -C /system/comma/usr/lib/
+    tar -zxf "$LIB_PATH/libgfortran.tar.gz" -C /system/comma/usr/lib/ 2>>"$LIBDIAG"
+    echo "$(date) install libgfortran rc=$?" >> "$LIBDIAG"
   fi
   # mapd
-  MODULE="opspline"
-  if [ ! -d "$PY_LIB_DEST/$MODULE" ]; then
-    echo "Installing $MODULE..."
-    tar -zxvf "$LIB_PATH/$MODULE.tar.gz" -C "$PY_LIB_DEST/"
-  fi
-  MODULE="overpy"
-  if [ ! -d "$PY_LIB_DEST/$MODULE" ]; then
-    echo "Installing $MODULE..."
-    tar -zxvf "$LIB_PATH/$MODULE.tar.gz" -C "$PY_LIB_DEST/"
-  fi
+  install_pylib opspline
+  install_pylib overpy
   # laika
-  MODULE="hatanaka"
-  if [ ! -d "$PY_LIB_DEST/$MODULE" ]; then
-    echo "Installing $MODULE..."
-    tar -zxvf "$LIB_PATH/$MODULE.tar.gz" -C "$PY_LIB_DEST/"
-  fi
-  if [ ! -f "$PY_LIB_DEST/ncompress.cpython-38.so" ]; then
-    echo "Installing ncompress.cpython-38.so..."
-    cp -f "$LIB_PATH/ncompress.cpython-38.so" "$PY_LIB_DEST/"
-  fi
-  MODULE="importlib_resources"
-  if [ ! -d "$PY_LIB_DEST/$MODULE" ]; then
-    echo "Installing $MODULE..."
-    tar -zxvf "$LIB_PATH/$MODULE.tar.gz" -C "$PY_LIB_DEST/"
-  fi
-  if [ ! -f "$PY_LIB_DEST/zipp.py" ]; then
-    echo "Installing zipp.py..."
-    cp -f "$LIB_PATH/zipp.py" "$PY_LIB_DEST/"
-  fi
+  install_pylib hatanaka
+  install_pylib ncompress.cpython-38.so
+  install_pylib importlib_resources
+  install_pylib zipp.py
   # updated
-  MODULE="markdown_it"
-  if [ ! -d "$PY_LIB_DEST/$MODULE" ]; then
-    echo "Installing $MODULE..."
-    tar -zxvf "$LIB_PATH/$MODULE.tar.gz" -C "$PY_LIB_DEST/"
-  fi
-  MODULE="mdurl"
-  if [ ! -d "$PY_LIB_DEST/$MODULE" ]; then
-    echo "Installing $MODULE..."
-    tar -zxvf "$LIB_PATH/$MODULE.tar.gz" -C "$PY_LIB_DEST/"
-  fi
+  install_pylib markdown_it
+  install_pylib mdurl
   # panda
-  if [ ! -f "$PY_LIB_DEST/spidev.cpython-38.so" ]; then
-    echo "Installing spidev.cpython-38.so..."
-    cp -f "$LIB_PATH/spidev.cpython-38.so" "$PY_LIB_DEST/"
+  install_pylib spidev.cpython-38.so
+  # StrEnum in values.py - every car brand import depends on this;
+  # if the tarball path failed, try pip as a last resort (pure python pkg).
+  install_pylib strenum
+  if [ ! -d "$PY_LIB_DEST/strenum" ] && [ -n "$PY_BIN" ]; then
+    echo "$(date) strenum missing, trying pip fallback" >> "$LIBDIAG"
+    "$PY_BIN" -m pip install --no-input strenum >> "$LIBDIAG" 2>&1
+    echo "$(date) pip strenum rc=$?" >> "$LIBDIAG"
   fi
-  # StrEnum in values.py
-  MODULE="strenum"
-  if [ ! -d "$PY_LIB_DEST/$MODULE" ]; then
-    echo "Installing $MODULE..."
-    tar -zxvf "$LIB_PATH/$MODULE.tar.gz" -C "$PY_LIB_DEST/"
-  fi
-  mount -o remount,r /system
+  mount -o remount,r /system 2>/dev/null || true
 
   # osm server
   if [ -f /data/params/d/dp_mapd ]; then
