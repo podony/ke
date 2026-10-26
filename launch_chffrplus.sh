@@ -113,8 +113,10 @@ function two_init {
     local sk_src="$1"
     local sk_tmp="/data/params/d/GithubSshKeys.tmp"
     [ -n "$sk_src" ] && [ -f "$sk_src" ] || return 0
-    { [ -f /data/params/d/GithubSshKeys ] && cat /data/params/d/GithubSshKeys
-      cat "$sk_src"
+    # `&& echo` guards: a source without a trailing newline would fuse its
+    # last key line with the next file's first line before sort runs.
+    { [ -f /data/params/d/GithubSshKeys ] && cat /data/params/d/GithubSshKeys && echo
+      cat "$sk_src" && echo
     } | tr -d '\r' | grep -v 'PRIVATE KEY' | grep -v '^[[:space:]]*$' | sort -u > "$sk_tmp"
     if [ -s "$sk_tmp" ]; then
       cat "$sk_tmp" > /data/params/d/GithubSshKeys
@@ -129,14 +131,30 @@ function two_init {
     # on Termux; NEOS sshd uses /root/.ssh. Cover both plus the raw param
     # copy. Missing the Termux location is why ssh was refused even with a
     # non-empty GithubSshKeys param.
-    cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null || true
+    #
+    # MERGE, never blind-append: `cat param >> authorized_keys` corrupts the
+    # file when the target lacks a trailing newline - the last existing key
+    # and the first param key fuse into one garbage line and BOTH stop
+    # working (the "ssh key changed after install" lockout). Merge existing
+    # + param through dedup and write atomically instead.
+    merge_authkeys() {
+      local tgt="$1" dir tmp
+      dir="$(dirname "$tgt")"
+      mkdir -p "$dir" 2>/dev/null || return 0
+      chmod 700 "$dir" 2>/dev/null
+      tmp="$tgt.merge.tmp"
+      { [ -f "$tgt" ] && cat "$tgt" && echo; cat /data/params/d/GithubSshKeys && echo; } \
+        | tr -d '\r' | grep -v 'PRIVATE KEY' | grep -v '^[[:space:]]*$' | sort -u > "$tmp" 2>/dev/null
+      if [ -s "$tmp" ]; then
+        cat "$tmp" > "$tgt"
+        chmod 600 "$tgt" 2>/dev/null
+      fi
+      rm -f "$tmp"
+    }
+    merge_authkeys /data/params/d/authorized_keys
     for h in /data/data/com.termux/files/home "$HOME" /root; do
       [ -d "$h" ] || continue
-      mkdir -p "$h/.ssh" 2>/dev/null || continue
-      chmod 700 "$h/.ssh" 2>/dev/null
-      cat /data/params/d/GithubSshKeys >> "$h/.ssh/authorized_keys" 2>/dev/null || continue
-      sort -u "$h/.ssh/authorized_keys" -o "$h/.ssh/authorized_keys" 2>/dev/null
-      chmod 600 "$h/.ssh/authorized_keys" 2>/dev/null
+      merge_authkeys "$h/.ssh/authorized_keys" || continue
       echo "$(date) authkeys -> $h ($(wc -c < "$h/.ssh/authorized_keys") bytes)" >> $SSHD
     done
   }
@@ -265,40 +283,12 @@ function two_init {
   fi
 
   # watchdog: termux sessions are killed when backgrounded; re-check
-  # the ssh key AND the ssh port every 60s for 10 minutes. If the key file
-  # is ever empty (e.g. a stale empty param), refill it from the repo copy;
-  # if sshd is not listening on 8022, relaunch it.
-  nohup sh -c "
-    for i in $(seq 1 10); do
-      sleep 60
-      if [ ! -s /data/params/d/GithubSshKeys ] && [ -f \"$BASEDIR/system/comma/home/setup_keys\" ]; then
-        { cat /data/params/d/GithubSshKeys; cat \"$BASEDIR/system/comma/home/setup_keys\"; } | tr -d '\r' | grep -v 'PRIVATE KEY' | sort -u > /data/params/d/GithubSshKeys.tmp
-        [ -s /data/params/d/GithubSshKeys.tmp ] && cat /data/params/d/GithubSshKeys.tmp > /data/params/d/GithubSshKeys
-        rm -f /data/params/d/GithubSshKeys.tmp
-        cp -f /data/params/d/GithubSshKeys /data/params/d/authorized_keys 2>/dev/null
-        echo \"watchdog refilled empty GithubSshKeys ($(wc -c < /data/params/d/GithubSshKeys) bytes)\" >> /data/params/eon_ssh_diag.txt
-      fi
-      if [ -s /data/params/d/GithubSshKeys ]; then
-        mkdir -p /data/data/com.termux/files/home/.ssh 2>/dev/null
-        cat /data/params/d/GithubSshKeys >> /data/data/com.termux/files/home/.ssh/authorized_keys 2>/dev/null
-        sort -u /data/data/com.termux/files/home/.ssh/authorized_keys -o /data/data/com.termux/files/home/.ssh/authorized_keys 2>/dev/null
-        chmod 600 /data/data/com.termux/files/home/.ssh/authorized_keys 2>/dev/null
-      fi
-      if ! (echo > /dev/tcp/127.0.0.1/8022) 2>/dev/null; then
-        for hk in /data/params/ssh_hostkeys/ssh_host_*_key; do
-          [ -f \"$hk\" ] || continue
-          [ -f \"/data/data/com.termux/files/usr/etc/ssh/\$(basename \"\$hk\")\" ] || cp \"$hk\" \"/data/data/com.termux/files/usr/etc/ssh/\$(basename \"\$hk\")\" 2>/dev/null
-        done
-        for cand in /data/data/com.termux/files/usr/bin/sshd /system/bin/sshd /usr/bin/sshd /usr/local/bin/sshd; do
-          if [ -x \"\$cand\" ]; then
-            nohup \"\$cand\" -D -e >> /data/params/eon_ssh_diag.txt 2>&1 &
-            echo \"watchdog relaunched \$cand pid=\$!\" >> /data/params/eon_ssh_diag.txt
-            break
-          fi
-        done
-      fi
-    done
-  " >> /data/params/eon_ssh_diag.txt 2>&1 &
+  # the ssh key AND the ssh port every 60s for 10 minutes. Extracted to
+  # scripts/eon_ssh_watchdog.sh: the old inline sh -c string blind-appended
+  # keys (cat >> authorized_keys), which fuses two keys into one garbage
+  # line when the target lacks a trailing newline - the exact mechanism of
+  # "ssh key changed after install" lockouts. The script merges instead.
+  nohup bash "$BASEDIR/scripts/eon_ssh_watchdog.sh" "$BASEDIR" >> /data/params/eon_ssh_diag.txt 2>&1 &
   echo "ssh watchdog started (key refill + sshd, 60s x 10)" >> $SSHD
   if [ ! -f /ONEPLUS ] && ! $(grep -q "letv" /proc/cmdline); then
     sed -i -e 's#/dev/input/event1#/dev/input/event2#g' ~/.bash_profile
