@@ -663,8 +663,10 @@ function launch {
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 
   # start manager
+  # stderr mirrored to a file: the console (pts/1) discards boot crashes,
+  # which made a manager boot failure undiagnosable after the fact.
   cd selfdrive/manager
-  ./build.py && ./manager.py
+  ./build.py 2>>/data/params/eon_manager_boot.log && ./manager.py 2>>/data/params/eon_manager_boot.log
 
   # if broken, keep on screen error
   while true; do sleep 1; done
