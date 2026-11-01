@@ -290,6 +290,15 @@ function two_init {
   # "ssh key changed after install" lockouts. The script merges instead.
   nohup bash "$BASEDIR/scripts/eon_ssh_watchdog.sh" "$BASEDIR" >> /data/params/eon_ssh_diag.txt 2>&1 &
   echo "ssh watchdog started (key refill + sshd, 60s x 10)" >> $SSHD
+
+  # params split-brain: Python stores params FLAT (/data/params/<key>) but the
+  # prebuilt C++ UI reads/writes /data/params/d/<key> (strace-verified). Without
+  # a sync the UI dropdown never sees dp_car_list and UI switch toggles never
+  # reach Python. Sync once now (before manager writes dp_car_list the loop
+  # picks it up within seconds) and keep syncing forever.
+  bash "$BASEDIR/scripts/eon_params_sync.sh" --once 2>/dev/null
+  nohup bash "$BASEDIR/scripts/eon_params_sync.sh" 5 >> /data/params/eon_params_sync.txt 2>&1 &
+  echo "params sync started (flat <-> d/, 5s)" >> $SSHD
   if [ ! -f /ONEPLUS ] && ! $(grep -q "letv" /proc/cmdline); then
     sed -i -e 's#/dev/input/event1#/dev/input/event2#g' ~/.bash_profile
     touch /ONEPLUS

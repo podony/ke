@@ -108,6 +108,17 @@ def manager_init() -> None:
     if not isinstance(carlist, str):
       carlist = str(carlist)
     params.put("dp_car_list", carlist)
+    # The prebuilt C++ UI reads params from /data/params/d/<key>, not the
+    # flat Python store (strace-verified: it opens /data/params/d/dp_car_list).
+    # Write there directly so the dropdown is populated even before
+    # scripts/eon_params_sync.sh's loop first runs.
+    try:
+      import os
+      os.makedirs("/data/params/d", exist_ok=True)
+      with open("/data/params/d/dp_car_list", "w") as _f:
+        _f.write(carlist)
+    except Exception:
+      pass
     print("CARLIST_OK len=%s" % len(carlist), flush=True)
   except Exception:
     import traceback as _tb
@@ -123,7 +134,15 @@ def manager_init() -> None:
     # show. Fingerprinting (boardd) is independent of this list.
     try:
       known = sorted(all_known_cars())
-      params.put("dp_car_list", ",".join(known))
+      # JSON, same shape the UI parses ({"cars": [...]}); a comma-joined
+      # string is not parseable by the UI and yields an empty dropdown.
+      fallback = json.dumps({"cars": known})
+      params.put("dp_car_list", fallback)
+      try:
+        with open("/data/params/d/dp_car_list", "w") as _f:
+          _f.write(fallback)
+      except Exception:
+        pass
       print("CARLIST_FALLBACK len=%s" % len(known), flush=True)
     except Exception:
       pass
