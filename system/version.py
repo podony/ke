@@ -25,23 +25,27 @@ def run_cmd(cmd: List[str]) -> str:
 def run_cmd_default(cmd: List[str], default: Optional[str] = None) -> Optional[str]:
   try:
     return run_cmd(cmd)
-  except subprocess.CalledProcessError:
+  except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    # CalledProcessError: not a git repo (git-archive deploys have no .git);
+    # FileNotFoundError/OSError: git not installed at all (Termux EON)
     return default
 
 
 @cache
 def get_commit(branch: str = "HEAD") -> str:
-  return run_cmd_default(["git", "rev-parse", branch])
+  # "" not None: Params.put(None) raises TypeError and killed manager_init
+  # on git-archive deploys, skipping every param set after it
+  return run_cmd_default(["git", "rev-parse", branch], "")
 
 
 @cache
 def get_commit_date(commit: str = "HEAD") -> str:
-  return run_cmd_default(["git", "show", "--no-patch", "--format='%ct %ci'", commit])
+  return run_cmd_default(["git", "show", "--no-patch", "--format='%ct %ci'", commit], "")
 
 
 @cache
 def get_short_branch() -> str:
-  return run_cmd_default(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+  return run_cmd_default(["git", "rev-parse", "--abbrev-ref", "HEAD"], "")
 
 
 @cache
