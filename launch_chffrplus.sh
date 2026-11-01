@@ -518,7 +518,11 @@ function fix_openpilot_symlinks {
   local d="$1"
   [ -n "$d" ] || d="$BASEDIR"
   [ -d "$d/openpilot" ] || return 0
-  local pairs="common:common selfdrive:selfdrive/ system:system/ third_party:third_party tools:tools"
+  # NOTE the ../ prefix: the link lives inside $d/openpilot/, so the target
+  # must be relative to that directory. Targets without ../ point the link at
+  # itself (openpilot/common -> common), which is exactly what broke every
+  # `import openpilot.*` and kept the manager from starting.
+  local pairs="common:../common selfdrive:../selfdrive/ system:../system/ third_party:../third_party tools:../tools"
   local pair link target
   for pair in $pairs; do
     link="$d/openpilot/${pair%%:*}"
@@ -527,7 +531,13 @@ function fix_openpilot_symlinks {
       rm -f "$link" 2>/dev/null
       ln -s "$target" "$link" 2>/dev/null
       echo "fixed openpilot symlink: $link -> $target"
-    elif [ ! -e "$link" ]; then
+    elif [ -L "$link" ] && [ ! -e "$link" ]; then
+      # dangling or self-referential link: plain ln -s would fail on the
+      # existing name, so remove and re-create it
+      rm -f "$link" 2>/dev/null
+      ln -s "$target" "$link" 2>/dev/null
+      echo "replaced broken openpilot symlink: $link -> $target"
+    elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
       ln -s "$target" "$link" 2>/dev/null
     fi
   done
