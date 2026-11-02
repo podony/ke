@@ -113,7 +113,6 @@ def manager_init() -> None:
     # Write there directly so the dropdown is populated even before
     # scripts/eon_params_sync.sh's loop first runs.
     try:
-      import os
       os.makedirs("/data/params/d", exist_ok=True)
       with open("/data/params/d/dp_car_list", "w") as _f:
         _f.write(carlist)
