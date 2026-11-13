@@ -204,6 +204,21 @@ def get_car(logcan, sendcan, experimental_long_allowed, num_pandas=1):
     cloudlog.event("car doesn't match any fingerprints", fingerprints=fingerprints, error=True)
     candidate = "mock"
 
+  # EON(BRUNCH): if a brand's interface module failed to import (missing dep,
+  # broken symlink tree, ...), interfaces[] lacks its models and the lookup
+  # below raised KeyError -> controlsd crash-looped with the UI stuck on
+  # "waiting for controls". Log the real state, then degrade to dashcam.
+  if candidate not in interfaces:
+    cloudlog.event("interface not loaded for candidate", candidate=candidate,
+                   loaded_models=len(interfaces), error=True)
+    try:
+      with open('/data/params/eon_carlist_diag.txt', 'a') as _f:
+        _f.write("get_car: NO interface loaded for %r (loaded models: %d)\n" % (candidate, len(interfaces)))
+        _f.write("loaded sample: %s\n" % (sorted(interfaces.keys())[:12],))
+    except Exception:
+      pass
+    candidate = "mock"
+
   CarInterface, CarController, CarState = interfaces[candidate]
   CP = CarInterface.get_params(candidate, fingerprints, car_fw, experimental_long_allowed, docs=False)
   CP.carVin = vin

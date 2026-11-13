@@ -20,8 +20,16 @@ function upload_eon_logs {
   local logdir="$BASEDIR/eon_logs"
   mkdir -p "$logdir"
 
+  # Fresh read-only python-env / brand-import snapshot before collecting.
+  # eon_diag.sh only reads and writes its own report file.
+  if [ -f "$BASEDIR/scripts/eon_diag.sh" ]; then
+    timeout 90 sh "$BASEDIR/scripts/eon_diag.sh" >/dev/null 2>&1
+  fi
+
   # Copy diag files to a git-managed dir
-  for f in eon_ssh_diag.txt eon_apk_diag.txt eon_carlist_diag.txt; do
+  for f in eon_ssh_diag.txt eon_apk_diag.txt eon_carlist_diag.txt \
+           eon_controlsd_crash.txt eon_manager_boot.log eon_diag_report.txt \
+           eon_libs_diag.txt eon_log_upload.txt; do
     if [ -s "$diagdir/$f" ]; then
       cp -f "$diagdir/$f" "$logdir/$f"
     fi

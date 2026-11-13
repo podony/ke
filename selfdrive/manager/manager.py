@@ -146,6 +146,24 @@ def manager_init() -> None:
     except Exception:
       pass
 
+  # EON(BRUNCH): car list being populated does NOT prove the brand interface
+  # modules loaded (the list comes from fingerprints data, controlsd needs
+  # car_helpers.interfaces). Log the real interface state at every boot so a
+  # "waiting for controls" crash-loop is debuggable from the uploaded logs.
+  try:
+    from openpilot.selfdrive.car.car_helpers import interfaces as _ifaces
+    _gm = sorted(m for m in _ifaces if "CHEVROLET" in m or "BOLT" in m)
+    _msg = "interfaces loaded: %d models; GM/BOLT models: %s\n" % (len(_ifaces), _gm if _gm else "MISSING")
+  except Exception:
+    import traceback as _tb
+    _msg = "car_helpers import FAILED at boot:\n" + _tb.format_exc() + "\n"
+  try:
+    with open('/data/params/eon_carlist_diag.txt', 'a') as _f:
+      _f.write(_msg)
+  except Exception:
+    pass
+  print(_msg.strip()[:200], flush=True)
+
   if params.get_bool("RecordFrontLock"):
     params.put_bool("RecordFront", True)
 

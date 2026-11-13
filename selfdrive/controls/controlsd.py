@@ -1059,4 +1059,19 @@ def main(sm=None, pm=None, logcan=None):
 
 
 if __name__ == "__main__":
-  main()
+  # EON(BRUNCH): a startup crash here was previously invisible (silent
+  # crash-loop, UI stuck on "waiting for controls"). Persist the traceback
+  # so it survives reboot and gets uploaded by launch_chffrplus.sh.
+  try:
+    main()
+  except Exception:
+    import sys, traceback
+    _tb = traceback.format_exc()
+    sys.stderr.write("controlsd crashed:\n" + _tb)
+    try:
+      with open('/data/params/eon_controlsd_crash.txt', 'a') as _f:
+        _f.write("=== controlsd crash %s ===\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
+        _f.write(_tb)
+    except Exception:
+      pass
+    raise

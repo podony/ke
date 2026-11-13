@@ -498,9 +498,13 @@ def get_interface_attr(attr: str, combine_brands: bool = False, ignore_none: boo
             result[f] = v
       else:
         result[brand_name] = attr_data
-    except (ImportError, OSError) as e:
+    except Exception as e:
       # diagnostic: dump import failures so an empty car list is debuggable.
       # /tmp is wiped on reboot, so mirror to /data/params (persistent).
+      # NOTE: broadened from (ImportError, OSError) — a SyntaxError or any
+      # other error in ONE brand's interface.py used to propagate out of
+      # get_interface_attr, killing car_helpers' module-level import and
+      # crash-looping controlsd ("waiting for controls" forever).
       try:
         import traceback as _tb
         _msg = ('get_interface_attr(%s) failed for %s: %r\n' % (attr, brand_name, e))
