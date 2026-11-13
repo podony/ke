@@ -34,6 +34,86 @@ from openpilot.selfdrive.controls.lib.alertmanager import AlertManager, set_offr
 from openpilot.selfdrive.controls.lib.vehicle_model import VehicleModel
 from openpilot.system.hardware import HARDWARE, TICI
 
+# EON(BRUNCH): startup breadcrumbs. "waiting for controls to start" has a
+# finite set of causes, ALL on this startup path. The LAST line of
+# /data/params/eon_controlsd_stage.txt pinpoints where controlsd stopped:
+#   no fresh lines          -> died before main(): module import broke, OR manager
+#                              never started controlsd (check eon_diag_report.txt
+#                              process list + eon_carlist_diag.txt)
+#   stuck at "waiting first CAN"    -> harness/panda/boardd dead
+#   stuck at "waiting pandaStates"  -> boardd dead
+#   last line is "ch: fp: ..."      -> fingerprint/CAN/FW/ctor problem (car_helpers)
+#   stuck between "get_car ok" and
+#           "controllers ok"        -> LaC/LoC ctor died on bad CarParams
+#   "loop: started" present         -> controlsd alive; problem is elsewhere
+# Crashes additionally land classified in eon_controlsd_crash.txt. NOTE: the
+# manager runs main() via multiprocessing launcher() which swallows tracebacks
+# into sentry, so the crash dump is written from main() itself -- a handler in
+# __main__ would NEVER fire on device (only when running controlsd by hand).
+_STAGE_FILE = '/data/params/eon_controlsd_stage.txt'
+_CRASH_FILE = '/data/params/eon_controlsd_crash.txt'
+
+def _trim(path, max_bytes, keep_lines):
+  # crash-loop guard: these files are append-only, cap them so /data/params
+  # never fills up while still keeping the most recent history
+  try:
+    if os.path.getsize(path) > max_bytes:
+      with open(path) as f:
+        lines = f.read().splitlines()[-keep_lines:]
+      with open(path, 'w') as f:
+        f.write("\n".join(lines) + "\n")
+  except Exception:
+    pass
+
+def _stage(msg):
+  try:
+    _trim(_STAGE_FILE, 65536, 100)
+    with open(_STAGE_FILE, 'a') as f:
+      f.write("%s %s\n" % (time.strftime("%m-%d %H:%M:%S"), msg))
+  except Exception:
+    pass
+
+def _crash_dump(e):
+  """Classified crash record: one file tells the cause of 'waiting for controls'."""
+  import sys, traceback
+  tb = traceback.format_exc()
+  cls = type(e).__name__
+  if isinstance(e, (ImportError, ModuleNotFoundError)):
+    hint = "MISSING DEPENDENCY -> check 'strenum/cereal/numpy import' lines in eon_diag_report.txt; fix on device: pip install <name>"
+  elif isinstance(e, KeyError):
+    hint = "KEY missing -> param or interface model absent; see eon_carlist_diag.txt interfaces-health line"
+  elif isinstance(e, OSError):
+    hint = "OS error errno=%s -> affinity/permission/socket/bind problem" % getattr(e, 'errno', None)
+  elif 'capnp' in cls.lower() or 'capnp' in tb:
+    hint = "capnp schema mismatch -> cereal not rebuilt after schema change; rerun build on device"
+  else:
+    hint = ""
+  try:
+    sys.stderr.write("controlsd crashed (%s): %s\n" % (cls, hint))
+  except Exception:
+    pass
+  try:
+    with open(_CRASH_FILE, 'a') as f:
+      f.write("=== controlsd crash %s: %s %s ===\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), cls, hint))
+      try:
+        with open(_STAGE_FILE) as sf:
+          lines = sf.read().splitlines()[-3:]
+        f.write("last stages: %s\n" % (" | ".join(lines) if lines else "(none)"))
+      except Exception:
+        pass
+      f.write(tb)
+    _trim(_CRASH_FILE, 262144, 400)
+  except Exception:
+    pass
+  # Push the crash + diag logs to GitHub once per boot (no SSH needed on
+  # the PC side). /tmp guard: a crash-loop must not spam pushes.
+  try:
+    if not os.path.exists('/tmp/eon_crash_upload_done'):
+      open('/tmp/eon_crash_upload_done', 'w').close()
+      os.system('bash /data/openpilot/scripts/eon_upload_logs.sh >/dev/null 2>&1 &')
+  except Exception:
+    pass
+
 SOFT_DISABLE_TIME = 3  # seconds
 LDW_MIN_SPEED = 31 * CV.MPH_TO_MS
 LANE_DEPARTURE_THRESHOLD = 0.1
@@ -74,6 +154,7 @@ DP_LONG_MISSING_LEAD_SPEED = 19.44  # 70 kph
 class Controls:
   def __init__(self, sm=None, pm=None, can_sock=None, CI=None):
     config_realtime_process(4 if TICI else 3, Priority.CTRL_HIGH)
+    _stage("init: realtime ok")
 
     self.dp_gps_ok_once = False
 
@@ -106,6 +187,7 @@ class Controls:
     else:
       self.road_speed_limiter = None
     self.curve_decel = CurveDecelHelper(self.params)
+    _stage("init: params+limiter ok (cam_decel=%d)" % int(self.dp_cam_decel))
     self._dp_alka = self.params.get_bool("dp_alka")
     self._dp_alka_active = True
     self._dp_alka_trigger_count = 0
@@ -129,15 +211,20 @@ class Controls:
                                      'driverMonitoringState', 'longitudinalPlan', 'lateralPlan', 'liveLocationKalman',
                                      'managerState', 'liveParameters', 'radarState', 'liveTorqueParameters', 'testJoystick'] + self.camera_packets,
                                     ignore_alive=ignore, ignore_avg_freq=['radarState', 'testJoystick'])
+    _stage("init: submaster ok")
 
     if CI is None:
       # wait for one pandaState and one CAN packet
       print("Waiting for CAN messages...")
+      _stage("init: waiting first CAN packet...")
       get_one_can(self.can_sock)
+      _stage("init: CAN ok; waiting pandaStates...")
 
       num_pandas = len(messaging.recv_one_retry(self.sm.sock['pandaStates']).pandaStates)
+      _stage("init: pandaStates ok (n=%d); get_car start" % num_pandas)
       experimental_long_allowed = not self.dp_0813 and self.params.get_bool("ExperimentalLongitudinalEnabled") # and not is_release_branch()
       self.CI, self.CP = get_car(self.can_sock, self.pm.sock['sendcan'], experimental_long_allowed, num_pandas)
+      _stage("init: get_car ok: name=%s fp=%s dashcam=%s" % (self.CP.carName, self.CP.carFingerprint, self.CP.dashcamOnly))
     else:
       self.CI, self.CP = CI, CI.CP
 
@@ -180,6 +267,7 @@ class Controls:
     self.params.put("CarParams", cp_bytes)
     put_nonblocking("CarParamsCache", cp_bytes)
     put_nonblocking("CarParamsPersistent", cp_bytes)
+    _stage("init: carParams written")
 
     # cleanup old params
     if not self.CP.experimentalLongitudinalAvailable:# or is_release_branch():
@@ -206,6 +294,7 @@ class Controls:
       self.LaC = LatControlLQR(self.CP, self.CI)
     elif self.CP.lateralTuning.which() == 'torque':
       self.LaC = LatControlTorque(self.CP, self.CI)
+    _stage("init: controllers ok (lat=%s, steerType=%s)" % (self.CP.lateralTuning.which(), self.CP.steerControlType))
 
     self.initialized = False
     self.state = State.disabled
@@ -255,6 +344,7 @@ class Controls:
     # controlsd is driven by can recv, expected at 100Hz
     self.rk = Ratekeeper(100, print_delay_threshold=None)
     self.prof = Profiler(False)  # off by default
+    _stage("init: __init__ done")
 
   def set_initial_state(self):
     if REPLAY:
@@ -1048,38 +1138,30 @@ class Controls:
       while True:
         self.step()
         self.rk.monitor_time()
-    except SystemExit:
+    finally:
+      # EON(BRUNCH): stop params_thread on ANY exit, not just SystemExit.
+      # It is a non-daemon thread: after a crash in step() it kept the child
+      # process ALIVE with controlsState unpublished, so manager saw
+      # "controlsd running", never restarted it, and the UI sat on
+      # "waiting for controls" forever (no crash-loop, no traceback).
       e.set()
       t.join()
 
 
 def main(sm=None, pm=None, logcan=None):
-  controls = Controls(sm, pm, logcan)
-  controls.controlsd_thread()
+  _stage("main: entered")
+  try:
+    controls = Controls(sm, pm, logcan)
+    _stage("loop: started (controlsd ALIVE)")
+    controls.controlsd_thread()
+  except Exception as e:
+    # manager's launcher() swallows this into sentry; persist it ourselves.
+    # Must be HERE (inside main), not in __main__: the manager starts
+    # controlsd via multiprocessing -> __main__ never runs on device.
+    _crash_dump(e)
+    raise
 
 
 if __name__ == "__main__":
-  # EON(BRUNCH): a startup crash here was previously invisible (silent
-  # crash-loop, UI stuck on "waiting for controls"). Persist the traceback
-  # so it survives reboot and gets uploaded by launch_chffrplus.sh.
-  try:
-    main()
-  except Exception:
-    import sys, traceback
-    _tb = traceback.format_exc()
-    sys.stderr.write("controlsd crashed:\n" + _tb)
-    try:
-      with open('/data/params/eon_controlsd_crash.txt', 'a') as _f:
-        _f.write("=== controlsd crash %s ===\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
-        _f.write(_tb)
-    except Exception:
-      pass
-    # Push the crash + diag logs to GitHub once per boot (no SSH needed on
-    # the PC side). /tmp guard: a crash-loop must not spam pushes.
-    try:
-      if not os.path.exists('/tmp/eon_crash_upload_done'):
-        open('/tmp/eon_crash_upload_done', 'w').close()
-        os.system('bash /data/openpilot/scripts/eon_upload_logs.sh >/dev/null 2>&1 &')
-    except Exception:
-      pass
-    raise
+  # manual run on device/PC: crash dump happens inside main()
+  main()

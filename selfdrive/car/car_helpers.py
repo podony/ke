@@ -18,6 +18,16 @@ FRAME_FINGERPRINT = 100  # 1s
 
 EventName = car.CarEvent.EventName
 
+# EON(BRUNCH): shares controlsd's stage breadcrumb file (see controlsd.py)
+# so a hang inside fingerprinting is pinpointed without a traceback.
+_STAGE_FILE = '/data/params/eon_controlsd_stage.txt'
+def _stage(msg):
+  try:
+    with open(_STAGE_FILE, 'a') as f:
+      f.write("%s ch: %s\n" % (time.strftime("%H:%M:%S"), msg))
+  except Exception:
+    pass
+
 
 def get_startup_event(car_recognized, controller_available, fw_seen):
   if True: #is_comma_remote() and is_tested_branch():
@@ -129,6 +139,7 @@ def fingerprint(logcan, sendcan, num_pandas):
   if not fixed_fingerprint and dp_car_assigned is not None:
     fixed_fingerprint = dp_car_assigned.strip()
     skip_fw_query = True
+  _stage("fp: start fixed=%r skip_fw=%r" % (fixed_fingerprint, bool(skip_fw_query)))
 
   start_time = time.monotonic()
   if not skip_fw_query:
@@ -172,11 +183,14 @@ def fingerprint(logcan, sendcan, num_pandas):
   params.put_bool("FirmwareQueryDone", True)
 
   fw_query_time = time.monotonic() - start_time
+  _stage("fp: vin/fw done vin=%s fw=%d cached=%s" % (vin, len(car_fw), cached))
 
   # CAN fingerprint
   # drain CAN socket so we get the latest messages
   messaging.drain_sock_raw(logcan)
+  _stage("fp: can_fingerprint start (needs live CAN)")
   car_fingerprint, finger = can_fingerprint(lambda: get_one_can(logcan))
+  _stage("fp: can_fingerprint done candidate=%r" % car_fingerprint)
 
   exact_match = True
   source = car.CarParams.FingerprintSource.can
@@ -220,6 +234,7 @@ def get_car(logcan, sendcan, experimental_long_allowed, num_pandas=1):
     candidate = "mock"
 
   CarInterface, CarController, CarState = interfaces[candidate]
+  _stage("fp: get_params+ctor %r" % candidate)
   CP = CarInterface.get_params(candidate, fingerprints, car_fw, experimental_long_allowed, docs=False)
   CP.carVin = vin
   CP.carFw = car_fw

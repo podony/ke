@@ -30,8 +30,8 @@ function serve_eon_logs {
   (
     while true; do
       for f in eon_ssh_diag.txt eon_apk_diag.txt eon_carlist_diag.txt \
-               eon_controlsd_crash.txt eon_manager_boot.log eon_diag_report.txt \
-               eon_libs_diag.txt eon_log_upload.txt; do
+               eon_controlsd_crash.txt eon_controlsd_stage.txt eon_manager_boot.log \
+               eon_diag_report.txt eon_libs_diag.txt eon_log_upload.txt; do
         [ -s "/data/params/$f" ] && cp -f "/data/params/$f" "$servedir/$f"
       done
       [ -s "$BASEDIR/eon_logs/summary.txt" ] && cp -f "$BASEDIR/eon_logs/summary.txt" "$servedir/summary.txt"

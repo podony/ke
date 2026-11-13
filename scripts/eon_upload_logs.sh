@@ -23,8 +23,8 @@ if [ -f "$BASEDIR/scripts/eon_diag.sh" ]; then
 fi
 
 for f in eon_ssh_diag.txt eon_apk_diag.txt eon_carlist_diag.txt \
-         eon_controlsd_crash.txt eon_manager_boot.log eon_diag_report.txt \
-         eon_libs_diag.txt; do
+         eon_controlsd_crash.txt eon_controlsd_stage.txt eon_manager_boot.log \
+         eon_diag_report.txt eon_libs_diag.txt; do
   [ -s "$diagdir/$f" ] && cp -f "$diagdir/$f" "$logdir/$f"
 done
 
