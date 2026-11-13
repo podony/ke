@@ -14,69 +14,31 @@ fi
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 
-# Upload EON diagnostic logs to GitHub logs/ branch (non-fatal, WiFi required)
+# Upload EON diagnostic logs to GitHub logs/ branch (non-fatal, WiFi required).
+# Logic lives in scripts/eon_upload_logs.sh so controlsd's crash handler and
+# manual runs use the exact same path.
 function upload_eon_logs {
-  local diagdir="/data/params"
-  local logdir="$BASEDIR/eon_logs"
-  mkdir -p "$logdir"
+  bash "$BASEDIR/scripts/eon_upload_logs.sh" >> /data/params/eon_log_upload.txt 2>&1
+}
 
-  # Fresh read-only python-env / brand-import snapshot before collecting.
-  # eon_diag.sh only reads and writes its own report file.
-  if [ -f "$BASEDIR/scripts/eon_diag.sh" ]; then
-    timeout 90 sh "$BASEDIR/scripts/eon_diag.sh" >/dev/null 2>&1
-  fi
-
-  # Copy diag files to a git-managed dir
-  for f in eon_ssh_diag.txt eon_apk_diag.txt eon_carlist_diag.txt \
-           eon_controlsd_crash.txt eon_manager_boot.log eon_diag_report.txt \
-           eon_libs_diag.txt eon_log_upload.txt; do
-    if [ -s "$diagdir/$f" ]; then
-      cp -f "$diagdir/$f" "$logdir/$f"
-    fi
-  done
-
-  # Also grab a snapshot of key params (read-only, safe)
-  {
-    echo "=== $(date) EON param snapshot ==="
-    echo "GithubSshKeys size: $(wc -c < /data/params/d/GithubSshKeys 2>/dev/null || echo missing)"
-    echo "mappy installed: $(pm list packages 2>/dev/null | grep -c mappyobn || echo 0)"
-    echo "sshd process: $(pgrep -c sshd 2>/dev/null || echo 0)"
-    echo "openpilot HEAD: $(cd "$BASEDIR" && git log --oneline -1 2>/dev/null)"
-    echo "carlist_diag last 20 lines:"
-    tail -20 /tmp/car_list_diag.txt 2>/dev/null || echo "(none)"
-  } > "$logdir/summary.txt"
-
-  # Try to push to logs/ branch (best-effort, 15s timeout)
-  cd "$BASEDIR" || return
-  local origin_url
-  origin_url=$(git remote get-url origin 2>/dev/null)
-  [ -n "$origin_url" ] || return
-  # Re-authenticate on every boot in case the token changed.
-  git remote set-url origin "$origin_url" 2>/dev/null
-  case "$origin_url" in
-    http://*|https://*)
-      # Inject a token (dp_git_token param) if present; GitHub requires auth.
-      local token
-      token=$(cat /data/params/d/dp_git_token 2>/dev/null)
-      if [ -n "$token" ]; then
-        git remote set-url origin "https://x-access-token:$token@github.com/podony/ke.git" 2>/dev/null
-      fi
-      # Use a throwaway worktree so we never touch the main checkout.
-      git worktree add -q -f /tmp/eon_logs_wt logs 2>/dev/null \
-        || { git branch -q logs 2>/dev/null; git worktree add -q -f /tmp/eon_logs_wt logs 2>/dev/null; }
-      if [ -d /tmp/eon_logs_wt ]; then
-        cp -rf "$BASEDIR/eon_logs/." /tmp/eon_logs_wt/eon_logs/ 2>/dev/null
-        ( cd /tmp/eon_logs_wt && \
-          git -c user.email="eon@openpilot" -c user.name="EON" \
-            commit -qam "eon logs $(date +%s)" --allow-empty 2>/dev/null; \
-          timeout 15 git push -qf origin logs 2>>/data/params/eon_log_upload.txt \
-            && echo "push OK $(date)" >> /data/params/eon_log_upload.txt \
-            || echo "push FAIL rc=$? $(date)" >> /data/params/eon_log_upload.txt )
-        git worktree remove -qf /tmp/eon_logs_wt 2>/dev/null
-      fi
-      ;;
-    *) ;;
-  esac
+# No-SSH fallback channel: serve curated diag files over USB ethernet/RNDIS.
+# PC side: bash fetch_eon_logs.sh  (curl http://172.30.1.1:8099/<file>)
+# Only copies of diag .txt files are exposed — never /data/params itself.
+function serve_eon_logs {
+  local servedir="/data/params/eon_serve"
+  mkdir -p "$servedir"
+  (
+    while true; do
+      for f in eon_ssh_diag.txt eon_apk_diag.txt eon_carlist_diag.txt \
+               eon_controlsd_crash.txt eon_manager_boot.log eon_diag_report.txt \
+               eon_libs_diag.txt eon_log_upload.txt; do
+        [ -s "/data/params/$f" ] && cp -f "/data/params/$f" "$servedir/$f"
+      done
+      [ -s "$BASEDIR/eon_logs/summary.txt" ] && cp -f "$BASEDIR/eon_logs/summary.txt" "$servedir/summary.txt"
+      sleep 20
+    done
+  ) &
+  ( cd "$servedir" && python3 -m http.server 8099 >/dev/null 2>&1 ) &
 }
 
 function two_init {
@@ -84,6 +46,8 @@ function two_init {
 
   # Upload diagnostic logs to GitHub logs/ branch (non-fatal)
   upload_eon_logs &
+  # Serve the same logs over USB for the PC (no SSH needed)
+  serve_eon_logs &
 
   # convert to no ir ctrl param
   if [ -f /data/media/0/no_ir_ctrl ]; then

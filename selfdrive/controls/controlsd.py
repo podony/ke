@@ -1074,4 +1074,12 @@ if __name__ == "__main__":
         _f.write(_tb)
     except Exception:
       pass
+    # Push the crash + diag logs to GitHub once per boot (no SSH needed on
+    # the PC side). /tmp guard: a crash-loop must not spam pushes.
+    try:
+      if not os.path.exists('/tmp/eon_crash_upload_done'):
+        open('/tmp/eon_crash_upload_done', 'w').close()
+        os.system('bash /data/openpilot/scripts/eon_upload_logs.sh >/dev/null 2>&1 &')
+    except Exception:
+      pass
     raise
