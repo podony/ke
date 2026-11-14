@@ -25,10 +25,23 @@ NEW=/data/openpilot.new
 OLD_KEEP=/data/openpilot.old
 
 mkdir -p /data/params
-# log everything, but keep the operator's terminal live (SSH sessions need
-# to SEE progress; a plain `exec >> $LOG` leaves them staring at silence)
-exec > >(tee -a "$LOG") 2>&1
-echo "==== eon_installer v2 $(date) branch=$BRANCH ===="
+
+# One installer at a time: an SSH wrapper that retries keys re-runs the whole
+# command per attempt, which launched 4 concurrent installers on 2026-11-14
+# (racing on /data/openpilot.new). mkdir is atomic; trap cleans the lock.
+LOCK=/data/params/eon_install.lock
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "FAIL: another eon_installer is running ($LOCK exists)."
+  echo "      if stale: rmdir $LOCK and re-run."
+  exit 1
+fi
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
+# Plain append redirect, NOT `exec > >(tee ...)`: on 2026-11-14 the tee
+# child died with the SSH pipe and eon_install.log was never created.
+# Watch progress from a second shell:  tail -f /data/params/eon_install.log
+exec >> "$LOG" 2>&1
+echo "==== eon_installer v2.1 $(date) branch=$BRANCH ===="
 
 fail() {
   echo "FAIL: $1"
@@ -92,4 +105,5 @@ CONT=/data/data/com.termux/files/continue.sh
   fail "could not write continue.sh (Termux data missing?)"
 
 echo "==== install OK $(date): branch=$BRANCH, previous version kept at $OLD_KEEP ===="
+sync   # the log must survive the reboot
 reboot
